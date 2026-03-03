@@ -17,6 +17,7 @@ from flask import Flask, render_template, request, send_file, jsonify
 
 from svg_processor import extract_slides_from_svg, validate_svg_input
 from pptx_builder import build_pptx_from_slides
+from svg_fixer import fix_svg
 
 # ─── Khởi tạo ứng dụng Flask ────────────────────────────────────────────────
 app = Flask(__name__)
@@ -85,6 +86,38 @@ def save_prompt():
         app.logger.error("Lỗi lưu prompt: %s", exc)
         return jsonify({"success": False, "error": str(exc)}), 500
 
+# ─── Route: Kiểm tra & Sửa lỗi SVG ───────────────────────────────────────────
+@app.route("/api/fix-svg", methods=["POST"])
+def fix_svg_route():
+    """
+    Nhận mã SVG thô, chạy pipeline kiểm tra và tự động sửa lỗi.
+    Trả về JSON gồm:
+      - success     : bool
+      - fixed_svg   : cỗuỗi SVG đã sửa
+      - fixes       : danh sách những cải thiện đã làm
+      - warnings    : cảnh báo
+      - errors      : lỗi không sửa được
+      - slide_count : số slide tìm thấy
+    """
+    data = request.get_json() or {}
+    raw_svg = data.get("svg_code", "").strip()
+
+    if not raw_svg:
+        return jsonify({"success": False, "errors": ["Mã SVG không được để trống."]}), 400
+
+    try:
+        result = fix_svg(raw_svg)
+        return jsonify({
+            "success":     result.success,
+            "fixed_svg":   result.fixed_svg,
+            "fixes":       result.fixes,
+            "warnings":    result.warnings,
+            "errors":      result.errors,
+            "slide_count": result.slide_count,
+        })
+    except Exception as exc:
+        app.logger.error("Lỗi fix-svg: %s", exc, exc_info=True)
+        return jsonify({"success": False, "errors": [str(exc)]}), 500
 
 # ─── Route: Tạo file PPTX ────────────────────────────────────────────────────
 @app.route("/generate", methods=["POST"])

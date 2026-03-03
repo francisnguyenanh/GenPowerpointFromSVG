@@ -230,8 +230,43 @@
       font-weight: 600;
     }
 
-    /* ─── Counter badge ──────────────────────────────────────────── */
-    #slide-count-badge {
+    /* ─── Fix result panel ────────────────────────────────────────── */
+    #fix-result {
+      font-size: 0.8rem;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    #fix-result .fix-header {
+      padding: 0.55rem 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+    }
+    #fix-result .fix-header.ok   { background: rgba(38,166,90,0.18);  color: #69f0ae; }
+    #fix-result .fix-header.warn { background: rgba(255,167,38,0.15); color: #ffd740; }
+    #fix-result .fix-header.err  { background: rgba(239,83,80,0.18);  color: #ff6e6e; }
+    #fix-result ul {
+      margin: 0;
+      padding: 0.6rem 0.9rem 0.6rem 1.6rem;
+      background: var(--bg-input);
+    }
+    #fix-result li { margin-bottom: 0.25rem; line-height: 1.5; }
+    #fix-result li.fix  { color: #a5d6a7; }
+    #fix-result li.warn { color: #ffe082; }
+    #fix-result li.err  { color: #ef9a9a; }
+
+    /* ─── Btn fix ─────────────────────────────────────────────────── */
+    .btn-fix-custom {
+      background: linear-gradient(135deg, #7b1fa2 0%, #4a148c 100%);
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      padding: 0.55rem 1rem;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .btn-fix-custom:hover { opacity: 0.9; transform: translateY(-1px); }
       font-size: 0.72rem;
       background: rgba(92, 107, 192, 0.2);
       border: 1px solid var(--primary);
@@ -462,12 +497,20 @@
         <!-- Textarea SVG -->
         <textarea
           id="svg_code"
-          class="form-control mb-3"
+          class="form-control mb-2"
           placeholder="Dán mã SVG từ AI vào đây (phải có các thẻ <g id='slide_1'>, <g id='slide_2'>...)"
         ></textarea>
 
         <!-- Các nút hành động -->
-        <div class="d-flex gap-2 align-items-center mb-3">
+        <div class="d-flex gap-2 align-items-center mb-2">
+          <button
+            id="btn-fix-svg"
+            type="button"
+            class="btn btn-fix-custom text-white"
+            title="Kiểm tra và tự động sửa lỗi SVG"
+          >
+            <i class="bi bi-wrench-adjustable me-1"></i>Kiểm tra & Sửa SVG
+          </button>
           <button
             id="btn-generate"
             type="button"
@@ -485,6 +528,9 @@
             <i class="bi bi-trash3"></i>
           </button>
         </div>
+
+        <!-- Kết quả kiểm tra SVG (ẩn mặc định) -->
+        <div id="fix-result" class="mb-2" style="display:none"></div>
 
         <!-- Thông tin tip -->
         <div class="p-3 rounded-3" style="background:rgba(38,198,218,0.07);border:1px solid rgba(38,198,218,0.2)">
@@ -690,8 +736,116 @@ document.getElementById("svg_code").addEventListener("input", function () {
 document.getElementById("btn-clear").addEventListener("click", function () {
   document.getElementById("svg_code").value = "";
   document.getElementById("slide-count-badge").style.display = "none";
+  document.getElementById("fix-result").style.display = "none";
   hideAlert();
 });
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Nút Kiểm tra & Sửa SVG
+   ═════════════════════════════════════════════════════════════════════════ */
+document.getElementById("btn-fix-svg").addEventListener("click", async function () {
+  const svgCode = document.getElementById("svg_code").value.trim();
+
+  if (!svgCode) {
+    showAlert("warning", '<i class="bi bi-exclamation-triangle me-2"></i>Vui lòng dán mã SVG trước khi kiểm tra.');
+    return;
+  }
+
+  // Trạng thái loading trên nút
+  const btn = this;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Đang phân tích...';
+  document.getElementById("fix-result").style.display = "none";
+  hideAlert();
+
+  try {
+    const response = await fetch("/api/fix-svg", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ svg_code: svgCode }),
+    });
+
+    const data = await response.json();
+
+    // ── Cập nhật textarea nếu có SVG đã sửa ────────────────────────────
+    if (data.fixed_svg) {
+      document.getElementById("svg_code").value = data.fixed_svg;
+      // Cập nhật badge slide count
+      const matches = (data.fixed_svg.match(/id=["']slide_\d+["']/g) || []).length;
+      const badge = document.getElementById("slide-count-badge");
+      if (matches > 0) {
+        document.getElementById("slide-count-num").textContent = matches;
+        badge.style.display = "inline-block";
+      }
+    }
+
+    // ── Render kết quả ────────────────────────────────────────────────
+    renderFixResult(data);
+
+  } catch (err) {
+    showAlert("danger",
+      `<i class="bi bi-x-circle-fill me-2"></i><strong>Lỗi kết nối:</strong> ${err.message}`
+    );
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-wrench-adjustable me-1"></i>Kiểm tra & Sửa SVG';
+  }
+});
+
+
+/** Render bảng kết quả fix SVG */
+function renderFixResult(data) {
+  const container = document.getElementById("fix-result");
+  container.innerHTML = "";
+  container.style.display = "block";
+
+  const allItems = [];
+
+  // Errors
+  (data.errors || []).forEach(msg => allItems.push({ type: "err", text: msg }));
+  // Warnings
+  (data.warnings || []).forEach(msg => allItems.push({ type: "warn", text: msg }));
+  // Fixes
+  (data.fixes || []).forEach(msg => allItems.push({ type: "fix", text: msg }));
+
+  if (allItems.length === 0) return;
+
+  // Xác định màu header theo trạng thái tổng thể
+  const hasErr  = (data.errors  || []).length > 0;
+  const hasWarn = (data.warnings|| []).length > 0;
+  const headerClass = hasErr ? "err" : hasWarn ? "warn" : "ok";
+
+  // Tóm tắt header
+  let headerIcon, headerText;
+  if (hasErr) {
+    headerIcon = "bi-x-circle-fill";
+    headerText = `Phát hiện ${data.errors.length} lỗi nghiêm trọng`;
+  } else if (hasWarn) {
+    headerIcon = "bi-exclamation-triangle-fill";
+    headerText = `Đã sửa ${(data.fixes||[]).length} vấn đề · ${data.warnings.length} cảnh báo`;
+  } else {
+    headerIcon = "bi-check-circle-fill";
+    const fixCount = (data.fixes||[]).length === 1 && data.fixes[0].includes("hợp lệ")
+      ? 0 : (data.fixes||[]).length;
+    headerText = fixCount > 0
+      ? `Đã sửa ${fixCount} vấn đề · Phát hiện ${data.slide_count} slide`
+      : `SVG hợp lệ · ${data.slide_count} slide`;
+  }
+
+  // Build HTML
+  let html = `<div class="fix-header ${headerClass}">
+    <i class="bi ${headerIcon} me-1"></i>${headerText}
+  </div>
+  <ul>`;
+
+  allItems.forEach(({ type, text }) => {
+    html += `<li class="${type}">${escapeHtml(text)}</li>`;
+  });
+  html += "</ul>";
+
+  container.innerHTML = html;
+}
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
