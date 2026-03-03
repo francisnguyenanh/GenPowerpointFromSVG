@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GenPPTX from SVG</title>
+
+  <!-- Bootstrap 5 CSS -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+  <!-- Bootstrap Icons -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    rel="stylesheet"
+  />
+
+  <style>
+    /* ─── Biến màu chủ đạo ──────────────────────────────────────── */
+    :root {
+      --primary:   #5c6bc0;
+      --secondary: #26c6da;
+      --bg-dark:   #0f1117;
+      --bg-card:   #1a1d27;
+      --bg-input:  #22263a;
+      --border:    #2e3250;
+      --text:      #e2e8f0;
+      --text-muted:#8892a4;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text);
+      font-family: "Segoe UI", Arial, sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ─── Header ────────────────────────────────────────────────── */
+    .app-header {
+      background: linear-gradient(135deg, #1e2140 0%, #12142a 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 1.25rem 0;
+    }
+    .app-header h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .app-header .badge-version {
+      font-size: 0.65rem;
+      background: var(--primary);
+      vertical-align: middle;
+      margin-left: 8px;
+    }
+
+    /* ─── Card ──────────────────────────────────────────────────── */
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+    }
+    .panel-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--secondary);
+      margin-bottom: 1.25rem;
+    }
+
+    /* ─── Form controls ─────────────────────────────────────────── */
+    .form-label {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 0.35rem;
+    }
+    .form-control,
+    .form-select {
+      background-color: var(--bg-input) !important;
+      border: 1px solid var(--border) !important;
+      color: var(--text) !important;
+      border-radius: 8px;
+    }
+    .form-control:focus,
+    .form-select:focus {
+      border-color: var(--primary) !important;
+      box-shadow: 0 0 0 3px rgba(92, 107, 192, 0.25) !important;
+    }
+    .form-control::placeholder { color: #4a5272; }
+
+    /* ─── Textarea SVG ──────────────────────────────────────────── */
+    #svg_code {
+      font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+      font-size: 0.78rem;
+      line-height: 1.6;
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    /* ─── Prompt box ─────────────────────────────────────────────── */
+    #prompt-box {
+      background: var(--bg-input);
+      border: 1px dashed var(--primary);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      font-size: 0.82rem;
+      line-height: 1.75;
+      color: #c5cae9;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #prompt-box mark {
+      background: rgba(92, 107, 192, 0.35);
+      color: #90caf9;
+      border-radius: 3px;
+      padding: 0 3px;
+    }
+
+    /* ─── Prompt action bar ─────────────────────────────────────── */
+    .prompt-action-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .prompt-action-bar .prompt-preview {
+      flex: 1;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ─── Buttons ────────────────────────────────────────────────── */
+    .btn-primary-custom {
+      background: linear-gradient(135deg, var(--primary) 0%, #3f51b5 100%);
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      padding: 0.55rem 1.4rem;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .btn-primary-custom:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-primary-custom:active { transform: translateY(0); }
+
+    .btn-success-custom {
+      background: linear-gradient(135deg, #26a69a 0%, #00897b 100%);
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 0.65rem 1.75rem;
+      font-size: 1rem;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .btn-success-custom:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-success-custom:disabled { opacity: 0.55; transform: none; }
+
+    .btn-outline-copy {
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      border-radius: 6px;
+      padding: 0.25rem 0.7rem;
+      background: transparent;
+      transition: all 0.2s;
+    }
+    .btn-outline-copy:hover {
+      background: var(--bg-input);
+      color: var(--text);
+      border-color: var(--primary);
+    }
+
+    /* ─── Alert ──────────────────────────────────────────────────── */
+    #alert-box {
+      border-radius: 10px;
+      font-size: 0.88rem;
+      display: none;
+    }
+
+    /* ─── Step indicator ─────────────────────────────────────────── */
+    .step-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--primary);
+      font-size: 0.75rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    /* ─── Footer ─────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
+
+    /* ─── Spinner overlay ────────────────────────────────────────── */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 17, 23, 0.75);
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    #loading-overlay .spinner-border {
+      width: 3rem;
+      height: 3rem;
+      border-width: 0.3rem;
+      color: var(--secondary);
+    }
+    #loading-overlay p {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    /* ─── Counter badge ──────────────────────────────────────────── */
+    #slide-count-badge {
+      font-size: 0.72rem;
+      background: rgba(92, 107, 192, 0.2);
+      border: 1px solid var(--primary);
+      color: #a5b4fc;
+      border-radius: 20px;
+      padding: 2px 10px;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- ─── Loading Overlay ──────────────────────────────────────────────────── -->
+<div id="loading-overlay">
+  <div class="spinner-border" role="status"></div>
+  <p>Đang tạo file PPTX, vui lòng chờ...</p>
+</div>
+
+<!-- ─── Modal: Chỉnh sửa Prompt ─────────────────────────────────────────────── -->
+<div class="modal fade" id="promptEditModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="background: var(--bg-card); border: 1px solid var(--border); color: var(--text);">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border);">
+        <h5 class="modal-title">
+          <i class="bi bi-pencil-square me-2"></i>Chỉnh sửa Prompt AI
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"
+          style="filter: invert(1);"></button>
+      </div>
+
+      <div class="modal-body">
+        <p class="text-muted small mb-2">
+          Biến động (sẽ được thay thế tự động):
+          <code>{topic}</code>, <code>{num_slides}</code>, <code>{language}</code>, <code>{style}</code>
+        </p>
+        <textarea
+          id="promptEditArea"
+          class="form-control"
+          rows="12"
+          style="background: var(--bg-input); color: var(--text); border: 1px solid var(--border); font-family: 'Courier New', monospace; font-size: 0.8rem;"
+        ></textarea>
+        <!-- Alert riêng trong modal, không dùng alert-box ngoài -->
+        <div id="modal-alert" class="alert mt-3 mb-0" style="display:none; font-size:0.85rem; border-radius:8px;"></div>
+      </div>
+
+      <div class="modal-footer" style="border-top: 1px solid var(--border);">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+        <button type="button" class="btn btn-primary-custom text-white" id="btnSavePrompt">
+          <i class="bi bi-check-circle me-1"></i>Lưu Prompt
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Header ───────────────────────────────────────────────────────────── -->
+<header class="app-header mb-4">
+  <div class="container">
+    <div class="d-flex align-items-center gap-3">
+      <i class="bi bi-file-earmark-slides-fill fs-3" style="color:var(--secondary)"></i>
+      <div>
+        <h1 class="mb-0 text-white">
+          GenPPTX from SVG
+          <span class="badge badge-version">v1.0</span>
+        </h1>
+        <small class="text-muted">Tạo file PowerPoint từ mã SVG do AI tạo ra</small>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ─── Main ──────────────────────────────────────────────────────────────── -->
+<main class="container pb-5">
+
+  <!-- Alert box -->
+  <div id="alert-box" class="alert" role="alert"></div>
+
+  <div class="row g-4">
+
+    <!-- ══════════════════════════════ CỘT TRÁI ══════════════════════════════ -->
+    <div class="col-lg-5">
+
+      <!-- Panel 1: Thông tin bài trình bày -->
+      <div class="panel mb-4">
+        <p class="panel-title">
+          <i class="bi bi-pencil-square me-1"></i> Thông tin bài trình bày
+        </p>
+
+        <!-- Chủ đề -->
+        <div class="mb-3">
+          <label for="topic" class="form-label">
+            <i class="bi bi-lightbulb me-1"></i>Chủ đề
+          </label>
+          <input
+            type="text"
+            id="topic"
+            name="topic"
+            class="form-control"
+            placeholder="Ví dụ: Trí tuệ nhân tạo trong giáo dục"
+          />
+        </div>
+
+        <div class="row g-3">
+          <!-- Số slide -->
+          <div class="col-6">
+            <label for="num_slides" class="form-label">
+              <i class="bi bi-layers me-1"></i>Số slide
+            </label>
+            <select id="num_slides" class="form-select">
+              <option value="5">5 slides</option>
+              <option value="7" selected>7 slides</option>
+              <option value="10">10 slides</option>
+              <option value="12">12 slides</option>
+              <option value="15">15 slides</option>
+            </select>
+          </div>
+
+          <!-- Ngôn ngữ -->
+          <div class="col-6">
+            <label for="language" class="form-label">
+              <i class="bi bi-translate me-1"></i>Ngôn ngữ
+            </label>
+            <select id="language" class="form-select">
+              <option value="Tiếng Việt" selected>🇻🇳 Tiếng Việt</option>
+              <option value="English">🇺🇸 English</option>
+              <option value="日本語">🇯🇵 日本語</option>
+              <option value="中文">🇨🇳 中文</option>
+              <option value="한국어">🇰🇷 한국어</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Phong cách -->
+        <div class="mt-3">
+          <label for="style" class="form-label">
+            <i class="bi bi-palette me-1"></i>Phong cách thiết kế
+          </label>
+          <select id="style" class="form-select">
+            <option value="chuyên nghiệp, tối giản, màu xanh dương" selected>
+              🔵 Chuyên nghiệp – Tối giản
+            </option>
+            <option value="sáng tạo, đầy màu sắc, gradient, modern">
+              🎨 Sáng tạo – Đầy màu sắc
+            </option>
+            <option value="corporate, dark background, gold accent">
+              🏢 Corporate – Dark & Gold
+            </option>
+            <option value="giáo dục, thân thiện, pastel, vui nhộn">
+              📚 Giáo dục – Pastel vui
+            </option>
+            <option value="công nghệ, cyberpunk, neon, dark">
+              💻 Tech – Neon Cyberpunk
+            </option>
+            <option value="tối giản, trắng đen, typography rõ ràng">
+              ⚪ Minimalist – Trắng Đen
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Panel 2: Tạo Prompt -->
+      <div class="panel">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <p class="panel-title mb-0">
+            <i class="bi bi-robot me-1"></i> Bước 1 — Prompt AI
+          </p>
+          <button
+            type="button"
+            class="btn btn-outline-secondary btn-sm"
+            data-bs-toggle="modal"
+            data-bs-target="#promptEditModal"
+            title="Chỉnh sửa template prompt"
+          >
+            <i class="bi bi-pencil-square me-1"></i>Sửa template
+          </button>
+        </div>
+
+        <!-- Action bar: preview + copy + toggle -->
+        <div class="prompt-action-bar mb-2">
+          <span class="prompt-preview" id="prompt-preview-text">
+            <span class="text-muted fst-italic">Điền thông tin để tạo prompt...</span>
+          </span>
+          <button
+            id="btn-copy-prompt"
+            type="button"
+            class="btn btn-primary-custom btn-sm text-white flex-shrink-0"
+            title="Sao chép prompt"
+            disabled
+          >
+            <i class="bi bi-clipboard me-1"></i>Copy
+          </button>
+          <button
+            id="btn-toggle-prompt"
+            type="button"
+            class="btn btn-outline-secondary btn-sm flex-shrink-0"
+            data-bs-toggle="collapse"
+            data-bs-target="#prompt-collapse"
+            aria-expanded="false"
+            title="Xem/ẩn nội dung prompt"
+          >
+            <i class="bi bi-chevron-down"></i>
+          </button>
+        </div>
+
+        <!-- Nội dung prompt (collapse) -->
+        <div class="collapse" id="prompt-collapse">
+          <div id="prompt-box" class="mb-0"></div>
+        </div>
+      </div>
+
+    </div><!-- /col-lg-5 -->
+
+    <!-- ══════════════════════════════ CỘT PHẢI ══════════════════════════════ -->
+    <div class="col-lg-7">
+      <div class="panel">
+
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <p class="panel-title mb-0">
+            <i class="bi bi-filetype-svg me-1"></i> Bước 2 — Dán mã SVG &amp; Xuất PPTX
+          </p>
+          <span id="slide-count-badge">
+            <i class="bi bi-layers-fill me-1"></i>
+            <span id="slide-count-num">0</span> slide
+          </span>
+        </div>
+
+        <!-- Textarea SVG -->
+        <textarea
+          id="svg_code"
+          class="form-control mb-3"
+          placeholder="Dán mã SVG từ AI vào đây (phải có các thẻ <g id='slide_1'>, <g id='slide_2'>...)"
+        ></textarea>
+
+        <!-- Các nút hành động -->
+        <div class="d-flex gap-2 align-items-center mb-3">
+          <button
+            id="btn-generate"
+            type="button"
+            class="btn btn-success-custom text-white flex-grow-1"
+          >
+            <i class="bi bi-file-earmark-arrow-down-fill me-2"></i>
+            Tạo File PPTX
+          </button>
+          <button
+            id="btn-clear"
+            type="button"
+            class="btn btn-outline-secondary"
+            title="Xóa nội dung"
+          >
+            <i class="bi bi-trash3"></i>
+          </button>
+        </div>
+
+        <!-- Thông tin tip -->
+        <div class="p-3 rounded-3" style="background:rgba(38,198,218,0.07);border:1px solid rgba(38,198,218,0.2)">
+          <p class="mb-1" style="font-size:0.78rem;color:#80deea">
+            <i class="bi bi-info-circle-fill me-1"></i>
+            <strong>Lưu ý khi mở PPTX:</strong>
+          </p>
+          <ul class="mb-0 ps-3" style="font-size:0.76rem;color:var(--text-muted)">
+            <li>Hỗ trợ PowerPoint 2019+ (SVG nhúng trực tiếp).</li>
+            <li>Click phải ảnh → <strong>Convert to Shape</strong> để chỉnh sửa.</li>
+            <li>Font đã chuẩn hóa sang <em>Arial / sans-serif</em>.</li>
+          </ul>
+        </div>
+
+      </div>
+    </div><!-- /col-lg-7 -->
+
+  </div><!-- /row -->
+</main>
+
+<!-- ─── Footer ────────────────────────────────────────────────────────────── -->
+<footer class="py-3 mt-4">
+  <div class="container text-center">
+    GenPPTX from SVG &nbsp;·&nbsp; Python Flask + python-pptx &nbsp;·&nbsp;
+    <span style="color:#5c6bc0">SVG → PPTX</span>
+  </div>
+</footer>
+
+<!-- Bootstrap 5 JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Biến global
+   ═════════════════════════════════════════════════════════════════════════ */
+let promptTemplate = "";
+let currentPromptText = "";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Khởi tạo: Tải prompt template từ server, rồi render ngay
+   ═════════════════════════════════════════════════════════════════════════ */
+document.addEventListener("DOMContentLoaded", async function () {
+  try {
+    const response = await fetch("/api/prompt");
+    if (response.ok) {
+      const data = await response.json();
+      promptTemplate = data.ai_prompt_template || "";
+      document.getElementById("promptEditArea").value = promptTemplate;
+      renderPrompt(); // render ngay với giá trị form mặc định
+    }
+  } catch (err) {
+    console.error("Lỗi tải prompt:", err);
+  }
+
+  // Gắn listener cho toggle icon chevron
+  const collapseEl = document.getElementById("prompt-collapse");
+  collapseEl.addEventListener("show.bs.collapse", () => {
+    document.querySelector("#btn-toggle-prompt i").className = "bi bi-chevron-up";
+  });
+  collapseEl.addEventListener("hide.bs.collapse", () => {
+    document.querySelector("#btn-toggle-prompt i").className = "bi bi-chevron-down";
+  });
+
+  // Khi mở modal, load template mới nhất vào textarea
+  document.getElementById("promptEditModal").addEventListener("show.bs.modal", () => {
+    document.getElementById("promptEditArea").value = promptTemplate;
+    hideModalAlert();
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Hàm render prompt — gọi mỗi khi input thay đổi
+   ═════════════════════════════════════════════════════════════════════════ */
+function renderPrompt() {
+  if (!promptTemplate) return;
+
+  const topic     = document.getElementById("topic").value.trim() || "[Chủ đề của bạn]";
+  const numSlides = document.getElementById("num_slides").value;
+  const language  = document.getElementById("language").value;
+  const style     = document.getElementById("style").value;
+
+  // Thay thế biến
+  currentPromptText = promptTemplate
+    .replace("{topic}",      topic)
+    .replace("{num_slides}", numSlides)
+    .replace("{language}",   language)
+    .replace("{style}",      style);
+
+  // Cập nhật preview (dòng đầu tiên)
+  const firstLine = currentPromptText.split("\n")[0];
+  document.getElementById("prompt-preview-text").textContent = firstLine;
+
+  // Cập nhật nội dung collapse (highlight biến)
+  const highlighted = escapeHtml(currentPromptText)
+    .replace(escapeHtml(topic),     `<mark>${escapeHtml(topic)}</mark>`)
+    .replace(numSlides,             `<mark>${numSlides}</mark>`)
+    .replace(escapeHtml(language),  `<mark>${escapeHtml(language)}</mark>`)
+    .replace(escapeHtml(style),     `<mark>${escapeHtml(style)}</mark>`);
+
+  document.getElementById("prompt-box").innerHTML = highlighted;
+
+  // Kích hoạt nút copy
+  document.getElementById("btn-copy-prompt").disabled = false;
+}
+
+// Auto-update prompt khi thay đổi bất kỳ input nào
+["topic", "num_slides", "language", "style"].forEach(id => {
+  document.getElementById(id).addEventListener("input",  renderPrompt);
+  document.getElementById(id).addEventListener("change", renderPrompt);
+});
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Nút Copy Prompt
+   ═════════════════════════════════════════════════════════════════════════ */
+document.getElementById("btn-copy-prompt").addEventListener("click", function () {
+  if (!currentPromptText) return;
+  navigator.clipboard.writeText(currentPromptText).then(() => {
+    this.innerHTML = '<i class="bi bi-clipboard-check me-1"></i>Đã chép!';
+    setTimeout(() => {
+      this.innerHTML = '<i class="bi bi-clipboard me-1"></i>Copy';
+    }, 2000);
+  });
+});
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Nút Save Prompt trong modal
+   ═════════════════════════════════════════════════════════════════════════ */
+document.getElementById("btnSavePrompt").addEventListener("click", async function () {
+  const newPrompt = document.getElementById("promptEditArea").value.trim();
+
+  if (!newPrompt) {
+    showModalAlert("warning", "Prompt không được để trống.");
+    return;
+  }
+
+  this.disabled = true;
+  this.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Đang lưu...';
+
+  try {
+    const response = await fetch("/api/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ai_prompt_template: newPrompt }),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      promptTemplate = newPrompt;
+      renderPrompt(); // re-render với template mới
+      showModalAlert("success", "✓ Đã lưu prompt thành công.");
+      setTimeout(() => {
+        bootstrap.Modal.getInstance(document.getElementById("promptEditModal")).hide();
+      }, 1200);
+    } else {
+      showModalAlert("danger", `Lỗi: ${data.error}`);
+    }
+  } catch (err) {
+    showModalAlert("danger", `Lỗi mạng: ${err.message}`);
+  } finally {
+    this.disabled = false;
+    this.innerHTML = '<i class="bi bi-check-circle me-1"></i>Lưu Prompt';
+  }
+});
+
+
+/* ─── Alert trong modal ─────────────────────────────────────────────────── */
+function showModalAlert(type, msg) {
+  const el = document.getElementById("modal-alert");
+  el.className = `alert alert-${type} mt-3 mb-0`;
+  el.style.fontSize = "0.85rem";
+  el.style.borderRadius = "8px";
+  el.textContent = msg;
+  el.style.display = "block";
+}
+function hideModalAlert() {
+  document.getElementById("modal-alert").style.display = "none";
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Theo dõi textarea SVG: đếm số slide phát hiện được
+   ═════════════════════════════════════════════════════════════════════════ */
+document.getElementById("svg_code").addEventListener("input", function () {
+  const matches = (this.value.match(/id=["']slide_\d+["']/g) || []).length;
+  const badge   = document.getElementById("slide-count-badge");
+  const num     = document.getElementById("slide-count-num");
+
+  if (matches > 0) {
+    num.textContent = matches;
+    badge.style.display = "inline-block";
+  } else {
+    badge.style.display = "none";
+  }
+});
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Nút Xóa textarea
+   ═════════════════════════════════════════════════════════════════════════ */
+document.getElementById("btn-clear").addEventListener("click", function () {
+  document.getElementById("svg_code").value = "";
+  document.getElementById("slide-count-badge").style.display = "none";
+  hideAlert();
+});
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Bước 2: Tạo PPTX — gửi form đến server
+   ═════════════════════════════════════════════════════════════════════════ */
+document.getElementById("btn-generate").addEventListener("click", async function () {
+  const svgCode = document.getElementById("svg_code").value.trim();
+  const topic   = document.getElementById("topic").value.trim();
+
+  // Kiểm tra phía client trước khi gửi
+  if (!svgCode) {
+    showAlert("danger", '<i class="bi bi-exclamation-triangle-fill me-2"></i>Vui lòng dán mã SVG vào ô bên trên.');
+    return;
+  }
+
+  hideAlert();
+  showLoading(true);
+
+  try {
+    // Gửi POST request với FormData
+    const formData = new FormData();
+    formData.append("svg_code", svgCode);
+    formData.append("topic",    topic);
+
+    const response = await fetch("/generate", {
+      method: "POST",
+      body:   formData,
+    });
+
+    if (!response.ok) {
+      // Lấy thông báo lỗi từ JSON response
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Lỗi server: HTTP ${response.status}`);
+    }
+
+    // Tải file PPTX về máy
+    const blob     = await response.blob();
+    const filename = getFilenameFromHeader(response) || `${topic || "presentation"}.pptx`;
+    downloadBlob(blob, filename);
+
+    showAlert("success",
+      `<i class="bi bi-check-circle-fill me-2"></i>` +
+      `Tạo file PPTX thành công! File <strong>${filename}</strong> đang được tải xuống.`
+    );
+
+  } catch (err) {
+    showAlert("danger",
+      `<i class="bi bi-x-circle-fill me-2"></i><strong>Lỗi:</strong> ${err.message}`
+    );
+  } finally {
+    showLoading(false);
+  }
+});
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Hàm tiện ích
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/** Thoát ký tự HTML đặc biệt */
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Hiển thị/ẩn overlay loading */
+function showLoading(show) {
+  const overlay = document.getElementById("loading-overlay");
+  overlay.style.display = show ? "flex" : "none";
+
+  const btn = document.getElementById("btn-generate");
+  btn.disabled = show;
+  btn.innerHTML = show
+    ? '<span class="spinner-border spinner-border-sm me-2"></span>Đang xử lý...'
+    : '<i class="bi bi-file-earmark-arrow-down-fill me-2"></i>Tạo File PPTX';
+}
+
+/** Hiển thị alert */
+function showAlert(type, message) {
+  const box = document.getElementById("alert-box");
+  box.className = `alert alert-${type}`;
+  box.innerHTML = message;
+  box.style.display = "block";
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/** Ẩn alert */
+function hideAlert() {
+  const box = document.getElementById("alert-box");
+  box.style.display = "none";
+}
+
+/** Lấy tên file từ Content-Disposition header */
+function getFilenameFromHeader(response) {
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i);
+  if (match && match[1]) {
+    return match[1].replace(/['"]/g, "");
+  }
+  return null;
+}
+
+/** Tải Blob về máy dưới dạng file */
+function downloadBlob(blob, filename) {
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href     = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+</script>
+
+</body>
+</html>
