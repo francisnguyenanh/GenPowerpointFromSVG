@@ -203,3 +203,24 @@ def build_pptx_from_slides(slides: list[dict]) -> io.BytesIO:
     prs.save(output)
     output.seek(0)
     return output
+
+
+def build_pptx_from_slides_with_master(
+    slides: list[dict],
+    pptx_bytes: bytes,
+    master_info: dict,
+) -> io.BytesIO:
+    """
+    Wrapper gọi master_handler.build_pptx_with_master().
+    Tách biệt để app.py không cần import trực tiếp master_handler.
+
+    Args:
+        slides:      Danh sách slide dict từ extract_slides_from_svg().
+        pptx_bytes:  Nội dung file master .pptx dạng bytes.
+        master_info: Kết quả từ parse_master_info().
+
+    Returns:
+        io.BytesIO chứa file PPTX đã map vào master.
+    """
+    from master_handler import build_pptx_with_master
+    return build_pptx_with_master(slides, pptx_bytes, master_info)

@@ -501,6 +501,84 @@
           placeholder="Dán mã SVG từ AI vào đây (phải có các thẻ <g id='slide_1'>, <g id='slide_2'>...)"
         ></textarea>
 
+        <!-- ── Mode Selector ──────────────────────────────────────────── -->
+        <div class="mb-2 p-2 rounded-3" style="background:rgba(255,255,255,0.04);border:1px solid var(--border)">
+          <div class="small fw-semibold mb-2" style="color:var(--text-muted)">Chế độ tạo PPTX</div>
+          <div class="d-flex gap-2">
+
+            <!-- Option 1: Tạo mới -->
+            <label class="flex-fill d-flex align-items-start gap-2 p-2 rounded-2 cursor-pointer mode-card" id="mode-new-card"
+                   style="border:2px solid var(--primary);background:rgba(92,107,192,0.1);cursor:pointer">
+              <input class="form-check-input mt-1 flex-shrink-0" type="radio" name="pptxMode"
+                     id="modeNew" value="new" checked>
+              <div>
+                <span class="fw-semibold d-block" style="font-size:0.82rem">✨ Tạo mới PPTX</span>
+                <small style="color:var(--text-muted);font-size:0.72rem">SVG nhúng trực tiếp, thiết kế tự do</small>
+              </div>
+            </label>
+
+            <!-- Option 2: Map vào master -->
+            <label class="flex-fill d-flex align-items-start gap-2 p-2 rounded-2 cursor-pointer mode-card" id="mode-master-card"
+                   style="border:2px solid var(--border);background:rgba(255,255,255,0.03);cursor:pointer">
+              <input class="form-check-input mt-1 flex-shrink-0" type="radio" name="pptxMode"
+                     id="modeMaster" value="master">
+              <div>
+                <span class="fw-semibold d-block" style="font-size:0.82rem">🎨 Map vào Master Slide</span>
+                <small style="color:var(--text-muted);font-size:0.72rem">Kế thừa font, màu, layout từ template</small>
+              </div>
+            </label>
+
+          </div>
+        </div>
+
+        <!-- ── Master Upload Panel (ẩn mặc định) ────────────────────── -->
+        <div id="masterUploadPanel" class="mb-2 rounded-3 d-none" style="border:1px solid #5c6bc0;overflow:hidden">
+          <div class="px-3 py-2 fw-semibold" style="background:rgba(92,107,192,0.18);font-size:0.8rem;color:#9fa8da">
+            <i class="bi bi-file-earmark-ppt-fill me-1"></i>Upload Master Slide (.pptx)
+          </div>
+          <div class="p-3">
+
+            <!-- File picker + nút upload -->
+            <div class="input-group input-group-sm mb-2">
+              <input type="file" class="form-control form-control-sm" id="masterFileInput" accept=".pptx"
+                     style="background:var(--bg-input);border-color:var(--border);color:var(--text)">
+              <button class="btn btn-sm text-white" id="btnUploadMaster"
+                      style="background:linear-gradient(135deg,#5c6bc0,#3949ab);border:none;min-width:80px">
+                <i class="bi bi-upload me-1"></i>Upload
+              </button>
+            </div>
+
+            <!-- Loading -->
+            <div id="masterUploadLoading" class="d-none text-center py-2" style="font-size:0.8rem;color:var(--text-muted)">
+              <div class="spinner-border spinner-border-sm me-2"></div>Đang phân tích master slide...
+            </div>
+
+            <!-- Error -->
+            <div id="masterUploadError" class="d-none rounded-2 px-3 py-2"
+                 style="background:rgba(239,83,80,0.12);border:1px solid rgba(239,83,80,0.3);color:#ef9a9a;font-size:0.79rem"></div>
+
+            <!-- Trạng thái master đã upload -->
+            <div id="masterStatus" class="d-none">
+              <div class="rounded-2 px-3 py-2 mb-2"
+                   style="background:rgba(38,166,90,0.12);border:1px solid rgba(38,166,90,0.3);color:#a5d6a7;font-size:0.79rem">
+                <i class="bi bi-check-circle-fill me-1"></i>
+                <strong>Master sẵn sàng:</strong> <span id="masterFilename"></span>
+              </div>
+              <div class="row g-2" style="font-size:0.76rem">
+                <div class="col-sm-8">
+                  <span style="color:var(--text-muted);font-weight:600">Layouts có sẵn:</span>
+                  <div id="masterLayoutsList" class="mt-1"></div>
+                </div>
+                <div class="col-sm-4">
+                  <span style="color:var(--text-muted);font-weight:600">Font mặc định:</span>
+                  <div id="masterDefaultFont" class="mt-1" style="color:var(--text)"></div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
         <!-- Các nút hành động -->
         <div class="d-flex gap-2 align-items-center mb-2">
           <button
@@ -861,6 +939,20 @@ document.getElementById("btn-generate").addEventListener("click", async function
     return;
   }
 
+  // Kiểm tra nếu đang ở chế độ master
+  const mode = getSelectedMode();
+  if (mode === "master") {
+    const masterReady = !document.getElementById("masterStatus").classList.contains("d-none");
+    if (!masterReady) {
+      showAlert("warning",
+        '<i class="bi bi-exclamation-triangle-fill me-2"></i>' +
+        'Vui lòng upload file Master Slide (.pptx) trước khi tạo PPTX.'
+      );
+      document.getElementById("masterUploadPanel").classList.remove("d-none");
+      return;
+    }
+  }
+
   hideAlert();
   showLoading(true);
 
@@ -870,7 +962,10 @@ document.getElementById("btn-generate").addEventListener("click", async function
     formData.append("svg_code", svgCode);
     formData.append("topic",    topic);
 
-    const response = await fetch("/generate", {
+    // Chọn endpoint theo mode
+    const endpoint = mode === "master" ? "/generate-with-master" : "/generate";
+
+    const response = await fetch(endpoint, {
       method: "POST",
       body:   formData,
     });
@@ -886,9 +981,10 @@ document.getElementById("btn-generate").addEventListener("click", async function
     const filename = getFilenameFromHeader(response) || `${topic || "presentation"}.pptx`;
     downloadBlob(blob, filename);
 
+    const modeLabel = mode === "master" ? " (Map vào Master)" : "";
     showAlert("success",
       `<i class="bi bi-check-circle-fill me-2"></i>` +
-      `Tạo file PPTX thành công! File <strong>${filename}</strong> đang được tải xuống.`
+      `Tạo file PPTX${modeLabel} thành công! File <strong>${filename}</strong> đang được tải xuống.`
     );
 
   } catch (err) {
@@ -899,6 +995,85 @@ document.getElementById("btn-generate").addEventListener("click", async function
     showLoading(false);
   }
 });
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Master Slide Mode Logic
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/** Lấy mode đang chọn: 'new' hoặc 'master' */
+function getSelectedMode() {
+  return document.querySelector('input[name="pptxMode"]:checked')?.value || "new";
+}
+
+// Toggle hiển thị panel upload khi chọn mode
+document.querySelectorAll('input[name="pptxMode"]').forEach(function(radio) {
+  radio.addEventListener("change", function() {
+    const isMaster = this.value === "master";
+    document.getElementById("masterUploadPanel").classList.toggle("d-none", !isMaster);
+    // Highlight card được chọn
+    const newCard    = document.getElementById("mode-new-card");
+    const masterCard = document.getElementById("mode-master-card");
+    if (isMaster) {
+      newCard.style.borderColor    = "var(--border)";
+      newCard.style.background     = "rgba(255,255,255,0.03)";
+      masterCard.style.borderColor = "var(--primary)";
+      masterCard.style.background  = "rgba(92,107,192,0.1)";
+    } else {
+      newCard.style.borderColor    = "var(--primary)";
+      newCard.style.background     = "rgba(92,107,192,0.1)";
+      masterCard.style.borderColor = "var(--border)";
+      masterCard.style.background  = "rgba(255,255,255,0.03)";
+    }
+  });
+});
+
+// Upload master file
+document.getElementById("btnUploadMaster").addEventListener("click", async function() {
+  const fileInput = document.getElementById("masterFileInput");
+  if (!fileInput.files.length) {
+    showMasterError("Vui lòng chọn file .pptx trước.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("master_file", fileInput.files[0]);
+
+  document.getElementById("masterUploadLoading").classList.remove("d-none");
+  document.getElementById("masterUploadError").classList.add("d-none");
+  document.getElementById("masterStatus").classList.add("d-none");
+  this.disabled = true;
+
+  try {
+    const res  = await fetch("/api/upload-master", { method: "POST", body: formData });
+    const data = await res.json();
+
+    document.getElementById("masterUploadLoading").classList.add("d-none");
+
+    if (data.success) {
+      document.getElementById("masterFilename").textContent = data.filename;
+      document.getElementById("masterDefaultFont").textContent = data.default_font || "Không xác định";
+      const layoutsHtml = (data.layouts || [])
+        .map(l => `<span class="badge me-1 mb-1" style="background:rgba(92,107,192,0.25);color:#c5cae9;border:1px solid rgba(92,107,192,0.4)">${escapeHtml(l.name)}</span>`)
+        .join("");
+      document.getElementById("masterLayoutsList").innerHTML = layoutsHtml || '<span style="color:var(--text-muted)">Không có layout</span>';
+      document.getElementById("masterStatus").classList.remove("d-none");
+    } else {
+      showMasterError(data.error || "Lỗi không xác định.");
+    }
+  } catch (err) {
+    document.getElementById("masterUploadLoading").classList.add("d-none");
+    showMasterError("Lỗi kết nối: " + err.message);
+  } finally {
+    this.disabled = false;
+  }
+});
+
+function showMasterError(msg) {
+  const el = document.getElementById("masterUploadError");
+  el.textContent = msg;
+  el.classList.remove("d-none");
+}
 
 
 /* ═══════════════════════════════════════════════════════════════════════════

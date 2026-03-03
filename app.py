@@ -16,8 +16,9 @@ from pathlib import Path
 from flask import Flask, render_template, request, send_file, jsonify
 
 from svg_processor import extract_slides_from_svg, validate_svg_input
-from pptx_builder import build_pptx_from_slides
+from pptx_builder import build_pptx_from_slides, build_pptx_from_slides_with_master
 from svg_fixer import fix_svg
+from master_handler import parse_master_info
 
 # ─── Khởi tạo ứng dụng Flask ────────────────────────────────────────────────
 app = Flask(__name__)
@@ -25,6 +26,10 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # Giới hạn 16 MB mỗi 
 
 # Đường dẫn file prompt
 PROMPTS_FILE = Path(__file__).parent / "prompts.json"
+
+# ─── Cache master PPTX trong memory ─────────────────────────────────────────
+# TODO: Upgrade lên Flask session + temp file nếu cần multi-user production
+_master_cache: dict = {}   # { "bytes": bytes, "info": dict, "filename": str }
 
 
 # ─── Hàm tiện ích ───────────────────────────────────────────────────────────
@@ -170,6 +175,92 @@ def generate():
     ).strip().replace(" ", "_")[:50]
 
     filename = f"{safe_topic or 'presentation'}.pptx"
+
+    return send_file(
+        pptx_buffer,
+        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+# ─── Route: Upload Master Slide ─────────────────────────────────────────────
+@app.route("/api/upload-master", methods=["POST"])
+def upload_master():
+    """
+    Nhận file PPTX upload, parse master info, lưu vào cache tạm.
+    Form field: master_file (file .pptx)
+    Trả về: { success, filename, layouts, theme_colors, default_font }
+    """
+    if "master_file" not in request.files:
+        return jsonify({"success": False, "error": "Không tìm thấy file"}), 400
+
+    file = request.files["master_file"]
+    if not file.filename or not file.filename.lower().endswith(".pptx"):
+        return jsonify({"success": False, "error": "Chỉ chấp nhận file .pptx"}), 400
+
+    pptx_bytes = file.read()
+    if len(pptx_bytes) > 10 * 1024 * 1024:  # Giới hạn 10MB
+        return jsonify({"success": False, "error": "File quá lớn (tối đa 10MB)"}), 400
+
+    try:
+        master_info = parse_master_info(pptx_bytes)
+    except Exception as exc:
+        app.logger.error("Lỗi parse master: %s", exc, exc_info=True)
+        return jsonify({"success": False, "error": f"Không thể đọc file PPTX: {str(exc)}"}), 400
+
+    _master_cache["bytes"]    = pptx_bytes
+    _master_cache["info"]     = master_info
+    _master_cache["filename"] = file.filename
+
+    return jsonify({
+        "success":      True,
+        "filename":     file.filename,
+        "layouts":      [{"index": l["index"], "name": l["name"]} for l in master_info["layouts"]],
+        "theme_colors": master_info["theme_colors"],
+        "default_font": master_info["default_font"],
+    })
+
+
+# ─── Route: Tạo PPTX với Master Slide ───────────────────────────────────────
+@app.route("/generate-with-master", methods=["POST"])
+def generate_with_master():
+    """
+    Nhận SVG + dùng master PPTX đã upload, trả về file PPTX map vào master.
+    Form fields: svg_code, topic
+    Yêu cầu: phải upload master trước qua /api/upload-master
+    """
+    if not _master_cache.get("bytes"):
+        return jsonify({
+            "success": False,
+            "error": "Chưa upload master slide. Vui lòng upload file .pptx trước."
+        }), 400
+
+    svg_code = request.form.get("svg_code", "").strip()
+    topic    = request.form.get("topic", "presentation").strip()
+
+    is_valid, error_msg = validate_svg_input(svg_code)
+    if not is_valid:
+        return jsonify({"success": False, "error": error_msg}), 400
+
+    slides = extract_slides_from_svg(svg_code)
+    if not slides:
+        return jsonify({"success": False, "error": "Không tìm thấy slide nào."}), 400
+
+    try:
+        pptx_buffer = build_pptx_from_slides_with_master(
+            slides,
+            _master_cache["bytes"],
+            _master_cache["info"],
+        )
+    except Exception as exc:
+        app.logger.error("Lỗi generate-with-master: %s", exc, exc_info=True)
+        return jsonify({"success": False, "error": f"Lỗi tạo PPTX: {str(exc)}"}), 500
+
+    safe_topic = "".join(
+        c if c.isalnum() or c in (" ", "-", "_") else "_" for c in topic
+    ).strip().replace(" ", "_")[:50]
+    filename = f"{safe_topic or 'presentation'}_master.pptx"
 
     return send_file(
         pptx_buffer,
