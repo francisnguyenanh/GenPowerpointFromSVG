@@ -534,6 +534,24 @@
               <div id="masterDefaultFont" class="mt-1" style="color:var(--text)"></div>
             </div>
           </div>
+
+          <!-- Dynamic Prompt Panel -->
+          <div id="dynamicPromptPanel" class="mt-3 rounded-2 d-none" style="border:1px solid rgba(38,166,90,0.35);overflow:hidden">
+            <div class="px-3 py-2 d-flex justify-content-between align-items-center"
+                 style="background:rgba(38,166,90,0.1);font-size:0.78rem;color:#a5d6a7;font-weight:600">
+              <span><i class="bi bi-robot me-1"></i>Prompt đã cập nhật theo Master Slide</span>
+              <button type="button" class="btn btn-sm text-white" id="btnCopyDynamicPrompt"
+                      style="background:rgba(38,166,90,0.3);border:1px solid rgba(38,166,90,0.5);font-size:0.72rem;padding:2px 10px">
+                <i class="bi bi-clipboard me-1"></i>Copy Prompt
+              </button>
+            </div>
+            <textarea id="dynamicPromptDisplay" class="form-control border-0 rounded-0"
+                      rows="8" readonly
+                      style="background:rgba(0,0,0,0.2);color:var(--text);font-family:'Courier New',monospace;font-size:0.7rem;resize:vertical"></textarea>
+            <div class="px-3 py-2" style="background:rgba(0,0,0,0.15);font-size:0.7rem;color:var(--text-muted)">
+              💡 Copy → paste vào AI → nhập chủ đề → gen SVG → paste vào ô bên phải → Tạo PPTX
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1198,6 +1216,14 @@ document.getElementById("btnUploadMaster").addEventListener("click", async funct
         .join("");
       document.getElementById("masterLayoutsList").innerHTML = layoutsHtml || '<span style="color:var(--text-muted)">Không có layout</span>';
       document.getElementById("masterStatus").classList.remove("d-none");
+
+      // Hiển thị dynamic prompt nếu có
+      if (data.dynamic_prompt) {
+        document.getElementById("dynamicPromptDisplay").value = data.dynamic_prompt;
+        document.getElementById("dynamicPromptPanel").classList.remove("d-none");
+      } else {
+        document.getElementById("dynamicPromptPanel").classList.add("d-none");
+      }
     } else {
       showMasterError(data.error || "Lỗi không xác định.");
     }
@@ -1214,6 +1240,20 @@ function showMasterError(msg) {
   el.textContent = msg;
   el.classList.remove("d-none");
 }
+
+// Copy dynamic prompt button
+document.getElementById("btnCopyDynamicPrompt").addEventListener("click", async function() {
+  const text = document.getElementById("dynamicPromptDisplay").value;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    this.innerHTML = '<i class="bi bi-clipboard-check me-1"></i>Đã copy!';
+    setTimeout(() => { this.innerHTML = '<i class="bi bi-clipboard me-1"></i>Copy Prompt'; }, 2000);
+  } catch {
+    document.getElementById("dynamicPromptDisplay").select();
+    document.execCommand("copy");
+  }
+});
 
 
 /* ═══════════════════════════════════════════════════════════════════════════

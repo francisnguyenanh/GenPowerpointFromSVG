@@ -231,10 +231,11 @@ def find_best_layout(master_info: dict, svg_data_layout: str) -> int:
 def extract_svg_semantic_content(slide_svg: str) -> dict:
     """
     Parse SVG XML để lấy nội dung từ các data-role attribute.
-    Bỏ qua hoàn toàn <g data-role="decorative">.
+    Hỗ trợ cấu trúc mới: <metadata><slide-layout>, data-type, data-level,
+    data-source, data-author. Bỏ qua <g data-role="decorative">.
 
     Args:
-        slide_svg: Chuỗi SVG đầy đủ của một slide đơn.
+        slide_svg: Chuỗi SVG hoàn chỉnh của một slide đơn.
 
     Returns:
         dict với layout, title, subtitle, content, content_left, content_right, footer.
@@ -250,61 +251,89 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
     }
 
     try:
-        # Parse SVG — lax để xử lý SVG không hoàn hảo
         parser = etree.XMLParser(recover=True, encoding="utf-8")
         try:
             root = etree.fromstring(slide_svg.encode("utf-8"), parser)
         except Exception:
             return result
 
-        # Hàm lấy text thuần từ một element (bao gồm text trong sub-elements)
-        def _collect_text(el) -> str:
+        def _localname(el) -> str:
+            """Lấy tag name không có namespace prefix."""
+            tag = el.tag
+            return etree.QName(tag).localname if "{" in tag else tag
+
+        def _get_full_text(el) -> str:
+            """
+            Lấy toàn bộ text content của element (kể cả <tspan> lồng nhau).
+            Dùng itertext() nhưng loại bỏ trùng lặp bằng cách chỉ đọc từ
+            leaf text nodes, không đọc text của element cha lại.
+            """
             parts = []
-            for t in el.itertext():
-                s = t.strip()
-                if s:
-                    parts.append(s)
+            for node in el.iter():
+                if node.get("data-role", "") == "decorative":
+                    continue
+                # Chỉ lấy text trực tiếp (node.text), không lấy tail của root
+                if node.text and node.text.strip():
+                    parts.append(node.text.strip())
+                # tail chỉ lấy cho các node con (không phải root el)
+                if node is not el and node.tail and node.tail.strip():
+                    parts.append(node.tail.strip())
             return " ".join(parts)
 
-        # Hàm parse các content item trong một group
-        def _parse_content_group(group_el) -> list:
+        def _parse_content_items(group_el) -> list:
+            """
+            Parse các text item trong một content group.
+            Chỉ lấy direct children có data-type hoặc là <text>,
+            tránh đọc đệ quy trùng lặp qua tspan.
+            """
             items = []
-            # Tìm tất cả element con có data-type hoặc text
-            for child in group_el.iter():
-                # Chỉ lấy text/tspan/g/rect với text thực
-                role = child.get("data-role", "")
+
+            def _process_child(el):
+                lname = _localname(el)
+                role  = el.get("data-role", "")
+
                 if role == "decorative":
-                    continue
-                dtype = child.get("data-type", "paragraph")
-                level = int(child.get("data-level", "1") or "1")
-                source = child.get("data-source", "")
-                author = child.get("data-author", "")
+                    return
 
-                # Lấy text trực tiếp (không đệ quy để tránh trùng)
-                text_parts = []
-                if child.text and child.text.strip():
-                    text_parts.append(child.text.strip())
-                for sub in child:
-                    if sub.get("data-role", "") == "decorative":
-                        continue
-                    if sub.text and sub.text.strip():
-                        text_parts.append(sub.text.strip())
-                    if sub.tail and sub.tail.strip():
-                        text_parts.append(sub.tail.strip())
+                dtype = el.get("data-type", "")
 
-                text = " ".join(text_parts).strip()
-                if text and child.tag != group_el.tag:
-                    items.append({
-                        "text":   text,
-                        "type":   dtype,
-                        "level":  level,
-                        "source": source,
-                        "author": author,
-                    })
+                if dtype:
+                    # Element có data-type rõ ràng → lấy toàn bộ text
+                    text = _get_full_text(el)
+                    if text:
+                        try:
+                            level = int(el.get("data-level", "1") or 1)
+                        except (ValueError, TypeError):
+                            level = 1
+                        items.append({
+                            "text":   text,
+                            "type":   dtype,
+                            "level":  level,
+                            "source": el.get("data-source", ""),
+                            "author": el.get("data-author", ""),
+                        })
+                elif lname == "text":
+                    # <text> không có data-type → paragraph
+                    text = _get_full_text(el)
+                    if text:
+                        items.append({
+                            "text":   text,
+                            "type":   "paragraph",
+                            "level":  1,
+                            "source": "",
+                            "author": "",
+                        })
+                elif lname == "g" and not role:
+                    # <g> không có data-role → đệ quy vào children trực tiếp
+                    for child in el:
+                        _process_child(child)
 
-            # Nếu không có sub-items → lấy text của chính group
+            for child in group_el:
+                _process_child(child)
+
+            # Fallback: nếu không có items, lấy toàn bộ text của group
             if not items:
-                text = _collect_text(group_el)
+                text = _get_full_text(group_el)
                 if text:
                     items.append({
                         "text":   text,
@@ -315,42 +344,58 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
                     })
             return items
 
-        # Tìm <g id="slide_N"> — root của nội dung slide
+        # ── Tìm slide root ────────────────────────────────────────────────
+        # Ưu tiên <g id="slide_N"> (được giữ lại từ wrap_group_in_svg cải tiến)
         slide_g = None
         for el in root.iter():
             el_id = el.get("id", "")
             if re.match(r"^slide_\d+$", el_id):
                 slide_g = el
                 break
-
         if slide_g is None:
-            slide_g = root  # Fallback: dùng root SVG
+            # Fallback: dùng <g> đầu tiên con của root (wrapper <g>)
+            for el in root:
+                if _localname(el) == "g":
+                    slide_g = el
+                    break
+        if slide_g is None:
+            slide_g = root
 
-        # Lấy data-layout từ slide group
-        result["layout"] = slide_g.get("data-layout", "content")
+        # ── Đọc data-layout từ attribute ─────────────────────────────────
+        result["layout"] = slide_g.get("data-layout", "content") or "content"
 
-        # Duyệt tất cả <g data-role="..."> trong slide
-        for group in slide_g.iter():
-            tag_local = etree.QName(group.tag).localname if "{" in group.tag else group.tag
-            if tag_local != "g":
+        # ── Đọc <metadata><slide-layout> (override data-layout nếu có) ───
+        # Cũng đọc trên root trong trường hợp slide_g = root
+        for search_el in [slide_g, root]:
+            for child in search_el:
+                if _localname(child) == "metadata":
+                    for meta_child in child:
+                        if _localname(meta_child) == "slide-layout":
+                            val = (meta_child.text or "").strip()
+                            if val:
+                                result["layout"] = val
+                    break
+
+        # ── Duyệt direct children của slide_g để tìm data-role groups ────
+        for el in slide_g:
+            lname = _localname(el)
+            role  = el.get("data-role", "").lower().strip()
+
+            if lname == "metadata" or role == "decorative":
                 continue
 
-            role = group.get("data-role", "").lower().strip()
-
-            if role == "decorative":
-                continue
-            elif role == "title":
-                result["title"] = _collect_text(group)
+            if role == "title":
+                result["title"] = _get_full_text(el)
             elif role == "subtitle":
-                result["subtitle"] = _collect_text(group)
+                result["subtitle"] = _get_full_text(el)
             elif role == "footer":
-                result["footer"] = _collect_text(group)
+                result["footer"] = _get_full_text(el)
             elif role == "content":
-                result["content"] = _parse_content_group(group)
+                result["content"] = _parse_content_items(el)
             elif role == "content-left":
-                result["content_left"] = _parse_content_group(group)
+                result["content_left"] = _parse_content_items(el)
             elif role == "content-right":
-                result["content_right"] = _parse_content_group(group)
+                result["content_right"] = _parse_content_items(el)
 
     except Exception:
         pass  # Trả về dict mặc định nếu parse lỗi
@@ -478,15 +523,23 @@ def build_pptx_with_master(
         # 1. Lấy nội dung semantic từ SVG
         semantic = extract_svg_semantic_content(svg_text)
 
-        # 2. Tìm layout phù hợp
-        layout_idx  = find_best_layout(master_info, semantic.get("layout", "content"))
-        layout_idx  = min(layout_idx, max_layout_idx)
-        layout      = prs.slide_layouts[layout_idx]
+        # 2. Xác định layout: ưu tiên data_layout đã cache khi extract,
+        #    fallback semantic parse, fallback "content"
+        raw_layout = (
+            slide_data.get("data_layout", "")
+            or semantic.get("layout", "")
+            or "content"
+        )
 
-        # 3. Thêm slide mới
+        # 3. Tìm layout index phù hợp trong master
+        layout_idx = find_best_layout(master_info, raw_layout)
+        layout_idx = min(layout_idx, max_layout_idx)
+        layout     = prs.slide_layouts[layout_idx]
+
+        # 4. Thêm slide mới
         slide = prs.slides.add_slide(layout)
 
-        # 4. Map title (idx=0)
+        # 5. Map title (placeholder idx=0)
         title_ph = _find_placeholder(slide, 0)
         if title_ph is not None:
             try:
@@ -494,9 +547,14 @@ def build_pptx_with_master(
             except Exception:
                 pass
 
-        # 5. Map subtitle (idx=1 trên title-slide layout)
+        # 6. Map subtitle (idx=1 trên title-slide / section-header)
         subtitle_text = semantic.get("subtitle", "")
-        if subtitle_text:
+        layout_name_lower = layout.name.lower()
+        is_title_layout = any(k in layout_name_lower for k in [
+            "title slide", "title, slide", "section header", "section"
+        ])
+
+        if subtitle_text and is_title_layout:
             sub_ph = _find_placeholder(slide, 1)
             if sub_ph is not None:
                 try:
@@ -504,32 +562,34 @@ def build_pptx_with_master(
                 except Exception:
                     pass
 
-        # 6. Map content
-        layout_name_lower = layout.name.lower()
-        is_two_column = any(k in layout_name_lower for k in ["two content", "comparison", "two column", "2 content"])
+        # 7. Map content theo loại layout
+        is_two_column = any(k in layout_name_lower for k in [
+            "two content", "comparison", "two column", "2 content"
+        ])
 
         if is_two_column:
-            # Map content_left → idx=1, content_right → idx=2
+            # two-column: content_left → idx=1, content_right → idx=2
             left_items  = semantic.get("content_left", []) or semantic.get("content", [])
             right_items = semantic.get("content_right", [])
             ph_left  = _find_placeholder(slide, 1)
             ph_right = _find_placeholder(slide, 2)
-            if ph_left is not None and left_items:
+            if ph_left  is not None and left_items:
                 _set_placeholder_text(ph_left, left_items)
             if ph_right is not None and right_items:
                 _set_placeholder_text(ph_right, right_items)
         else:
             content_items = semantic.get("content", [])
-            if content_items and not subtitle_text:
-                # Tìm body placeholder (idx=1)
-                body_ph = _find_placeholder(slide, 1)
-                if body_ph is not None:
-                    _set_placeholder_text(body_ph, content_items)
+            if content_items:
+                # Trên title-slide layout, body (idx=1) thường là subtitle →
+                # chỉ map content nếu không phải title layout hoặc không có subtitle
+                if not (is_title_layout and subtitle_text):
+                    body_ph = _find_placeholder(slide, 1)
+                    if body_ph is not None:
+                        _set_placeholder_text(body_ph, content_items)
 
-        # 7. Map footer
+        # 8. Map footer (thử idx 10, 11, 12)
         footer_text = semantic.get("footer", "")
         if footer_text:
-            # Thử idx=10, 11, 12 (footer placeholders)
             for footer_idx in [10, 11, 12]:
                 footer_ph = _find_placeholder(slide, footer_idx)
                 if footer_ph is not None:

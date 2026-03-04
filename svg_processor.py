@@ -83,6 +83,7 @@ def normalize_fonts(svg_string: str) -> str:
 def wrap_group_in_svg(group_tag, definitions: str = "") -> str:
     """
     Bọc nội dung của một thẻ <g> vào trong thẻ <svg> hoàn chỉnh.
+    Giữ lại id, data-layout và các data-* attribute để downstream parser đọc được.
 
     Args:
         group_tag: Đối tượng BeautifulSoup đại diện cho thẻ <g>.
@@ -91,13 +92,14 @@ def wrap_group_in_svg(group_tag, definitions: str = "") -> str:
     Returns:
         Chuỗi SVG hoàn chỉnh cho một slide.
     """
-    # Lấy nội dung bên trong thẻ <g>
     inner_content = group_tag.decode_contents()
 
-    # Lấy thuộc tính transform của group (nếu có) để áp dụng lên svg con
-    transform_attr = ""
-    if group_tag.get("transform"):
-        transform_attr = f' transform="{group_tag["transform"]}"'
+    # Giữ lại tất cả attribute quan trọng (id, data-*, transform, class)
+    preserved_attrs = ""
+    for attr, val in group_tag.attrs.items():
+        if isinstance(val, list):   # BS4 trả list cho class
+            val = " ".join(val)
+        preserved_attrs += f' {attr}="{val}"'
 
     svg_string = (
         f'<svg xmlns="http://www.w3.org/2000/svg" '
@@ -105,7 +107,7 @@ def wrap_group_in_svg(group_tag, definitions: str = "") -> str:
         f'viewBox="0 0 {SLIDE_WIDTH} {SLIDE_HEIGHT}" '
         f'width="{SLIDE_WIDTH}" height="{SLIDE_HEIGHT}">\n'
         f'{definitions}\n'
-        f'<g{transform_attr}>\n'
+        f'<g{preserved_attrs}>\n'
         f'{inner_content}\n'
         f'</g>\n'
         f'</svg>'
@@ -169,9 +171,10 @@ def extract_slides_from_svg(svg_source: str) -> list[dict]:
         svg_content = normalize_fonts(svg_content)
 
         slides.append({
-            "id":    slide_id,
-            "index": idx,
-            "svg":   svg_content,
+            "id":          slide_id,
+            "index":       idx,
+            "svg":         svg_content,
+            "data_layout": group.get("data-layout", ""),  # cache trước khi BS4 wrap mất
         })
 
     return slides
