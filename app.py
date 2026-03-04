@@ -240,12 +240,6 @@ def generate():
             )
         }), 400
 
-    # ── Bước 3: Lưu từng slide SVG ra output_svg/ ────────────────────────
-    try:
-        saved = save_slides_to_output_svg(slides, topic)
-        app.logger.info("Đã lưu %d slide SVG vào output_svg/", len(saved))
-    except Exception as exc:
-        app.logger.warning("save_slides_to_output_svg thất bại (non-critical): %s", exc)
 
     # ── Bước 4: Tạo file PPTX ─────────────────────────────────────────────
     try:
@@ -327,12 +321,6 @@ def generate_with_master():
     if not slides:
         return jsonify({"success": False, "error": "Không tìm thấy slide nào."}), 400
 
-    # Lưu từng slide SVG ra output_svg/
-    try:
-        saved = save_slides_to_output_svg(slides, topic)
-        app.logger.info("Đã lưu %d slide SVG vào output_svg/", len(saved))
-    except Exception as exc:
-        app.logger.warning("save_slides_to_output_svg thất bại (non-critical): %s", exc)
 
     try:
         pptx_buffer = build_pptx_from_slides_with_master(
