@@ -286,7 +286,7 @@
   <p>Đang tạo file PPTX, vui lòng chờ...</p>
 </div>
 
-<!-- ─── Modal: Chỉnh sửa Prompt ─────────────────────────────────────────────── -->
+<!-- ─── Modal: Chỉnh sửa Prompt AI ──────────────────────────────────────────── -->
 <div class="modal fade" id="promptEditModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg">
     <div class="modal-content" style="background: var(--bg-card); border: 1px solid var(--border); color: var(--text);">
@@ -299,21 +299,49 @@
       </div>
 
       <div class="modal-body">
+        <!-- Tab selector: chọn prompt nào đang sửa -->
+        <ul class="nav nav-pills mb-3" id="promptModalTabs" style="gap:6px">
+          <li class="nav-item">
+            <button class="nav-link active" id="tabPromptNew" data-prompt-tab="new">
+              ✨ Tạo mới PPTX
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tabPromptMaster" data-prompt-tab="master">
+              🎨 Map vào Master
+            </button>
+          </li>
+        </ul>
+
+        <!-- Ghi chú biến động -->
         <p class="text-muted small mb-2">
-          Biến động (sẽ được thay thế tự động):
-          <code>{topic}</code>, <code>{num_slides}</code>, <code>{language}</code>, <code>{style}</code>
+          Biến tự động: <code>{topic}</code> <code>{num_slides}</code> <code>{language}</code> <code>{style}</code>
+          <span id="masterVarNote" class="ms-2" style="display:none;color:#9fa8da">
+            · Master thêm: <code>data-layout</code> <code>data-role</code> <code>data-type</code>
+          </span>
         </p>
+
+        <!-- Textarea cho prompt "new" -->
         <textarea
-          id="promptEditArea"
+          id="promptEditAreaNew"
           class="form-control"
           rows="12"
           style="background: var(--bg-input); color: var(--text); border: 1px solid var(--border); font-family: 'Courier New', monospace; font-size: 0.8rem;"
         ></textarea>
-        <!-- Alert riêng trong modal, không dùng alert-box ngoài -->
+
+        <!-- Textarea cho prompt "master" (ẩn mặc định) -->
+        <textarea
+          id="promptEditAreaMaster"
+          class="form-control d-none"
+          rows="12"
+          style="background: var(--bg-input); color: var(--text); border: 1px solid var(--border); font-family: 'Courier New', monospace; font-size: 0.8rem;"
+        ></textarea>
+
         <div id="modal-alert" class="alert mt-3 mb-0" style="display:none; font-size:0.85rem; border-radius:8px;"></div>
       </div>
 
       <div class="modal-footer" style="border-top: 1px solid var(--border);">
+        <span id="modalSavingMode" class="me-auto text-muted small"></span>
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
         <button type="button" class="btn btn-primary-custom text-white" id="btnSavePrompt">
           <i class="bi bi-check-circle me-1"></i>Lưu Prompt
@@ -349,6 +377,42 @@
 
     <!-- ══════════════════════════════ CỘT TRÁI ══════════════════════════════ -->
     <div class="col-lg-5">
+
+      <!-- ── Mode Selector (Bước 0) ─────────────────────────────────────── -->
+      <div class="panel mb-4" style="padding:1.25rem 1.5rem">
+        <p class="panel-title mb-3">
+          <i class="bi bi-toggles2 me-1"></i> Chế độ xuất PPTX
+        </p>
+        <div class="d-flex gap-2">
+
+          <!-- Option 1: Tạo mới -->
+          <label class="flex-fill d-flex align-items-start gap-2 p-2 rounded-2"
+                 id="mode-new-card" style="border:2px solid var(--primary);background:rgba(92,107,192,0.12);cursor:pointer">
+            <input class="form-check-input mt-1 flex-shrink-0" type="radio" name="pptxMode"
+                   id="modeNew" value="new" checked>
+            <div>
+              <span class="fw-semibold d-block" style="font-size:0.82rem;color:var(--text)">✨ Tạo mới PPTX</span>
+              <small style="color:var(--text-muted);font-size:0.71rem;line-height:1.4">
+                SVG nhúng trực tiếp, thiết kế tự do, không cần template
+              </small>
+            </div>
+          </label>
+
+          <!-- Option 2: Map vào master -->
+          <label class="flex-fill d-flex align-items-start gap-2 p-2 rounded-2"
+                 id="mode-master-card" style="border:2px solid var(--border);background:rgba(255,255,255,0.03);cursor:pointer">
+            <input class="form-check-input mt-1 flex-shrink-0" type="radio" name="pptxMode"
+                   id="modeMaster" value="master">
+            <div>
+              <span class="fw-semibold d-block" style="font-size:0.82rem;color:var(--text)">🎨 Map vào Master Slide</span>
+              <small style="color:var(--text-muted);font-size:0.71rem;line-height:1.4">
+                Kế thừa font, màu, layout từ template PPTX của bạn
+              </small>
+            </div>
+          </label>
+
+        </div>
+      </div>
 
       <!-- Panel 1: Thông tin bài trình bày -->
       <div class="panel mb-4">
@@ -428,11 +492,61 @@
         </div>
       </div>
 
-      <!-- Panel 2: Tạo Prompt -->
+      <!-- ── Master Upload Panel (ẩn mặc định, hiện khi mode=master) ──────── -->
+      <div id="masterUploadPanel" class="panel mb-4 d-none" style="border-color:#5c6bc0;padding:1.25rem 1.5rem">
+        <p class="panel-title mb-3" style="color:#9fa8da">
+          <i class="bi bi-file-earmark-ppt-fill me-1"></i> Upload Master Slide (.pptx)
+        </p>
+
+        <!-- File picker + nút upload -->
+        <div class="input-group input-group-sm mb-2">
+          <input type="file" class="form-control form-control-sm" id="masterFileInput" accept=".pptx"
+                 style="background:var(--bg-input);border-color:var(--border);color:var(--text)">
+          <button type="button" class="btn btn-sm text-white" id="btnUploadMaster"
+                  style="background:linear-gradient(135deg,#5c6bc0,#3949ab);border:none;min-width:80px">
+            <i class="bi bi-upload me-1"></i>Upload
+          </button>
+        </div>
+
+        <!-- Loading -->
+        <div id="masterUploadLoading" class="d-none text-center py-2" style="font-size:0.8rem;color:var(--text-muted)">
+          <div class="spinner-border spinner-border-sm me-2"></div>Đang phân tích master slide...
+        </div>
+
+        <!-- Error -->
+        <div id="masterUploadError" class="d-none rounded-2 px-3 py-2"
+             style="background:rgba(239,83,80,0.12);border:1px solid rgba(239,83,80,0.3);color:#ef9a9a;font-size:0.79rem"></div>
+
+        <!-- Trạng thái đã upload -->
+        <div id="masterStatus" class="d-none">
+          <div class="rounded-2 px-3 py-2 mb-2"
+               style="background:rgba(38,166,90,0.12);border:1px solid rgba(38,166,90,0.3);color:#a5d6a7;font-size:0.79rem">
+            <i class="bi bi-check-circle-fill me-1"></i>
+            <strong>Master sẵn sàng:</strong> <span id="masterFilename"></span>
+          </div>
+          <div class="row g-2" style="font-size:0.76rem">
+            <div class="col-sm-8">
+              <span style="color:var(--text-muted);font-weight:600">Layouts có sẵn:</span>
+              <div id="masterLayoutsList" class="mt-1"></div>
+            </div>
+            <div class="col-sm-4">
+              <span style="color:var(--text-muted);font-weight:600">Font:</span>
+              <div id="masterDefaultFont" class="mt-1" style="color:var(--text)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 2: Prompt AI -->
       <div class="panel">
         <div class="d-flex justify-content-between align-items-center mb-3">
           <p class="panel-title mb-0">
             <i class="bi bi-robot me-1"></i> Bước 1 — Prompt AI
+            <span id="promptModeBadge"
+                  class="badge ms-2"
+                  style="font-size:0.65rem;background:rgba(92,107,192,0.3);color:#c5cae9;border:1px solid rgba(92,107,192,0.4)">
+              ✨ Tạo mới
+            </span>
           </p>
           <button
             type="button"
@@ -487,6 +601,10 @@
         <div class="d-flex align-items-center justify-content-between mb-3">
           <p class="panel-title mb-0">
             <i class="bi bi-filetype-svg me-1"></i> Bước 2 — Dán mã SVG &amp; Xuất PPTX
+            <span id="step2ModeBadge" class="badge ms-2"
+                  style="font-size:0.65rem;background:rgba(92,107,192,0.2);color:#c5cae9;border:1px solid rgba(92,107,192,0.3)">
+              ✨ Tạo mới
+            </span>
           </p>
           <span id="slide-count-badge">
             <i class="bi bi-layers-fill me-1"></i>
@@ -500,84 +618,6 @@
           class="form-control mb-2"
           placeholder="Dán mã SVG từ AI vào đây (phải có các thẻ <g id='slide_1'>, <g id='slide_2'>...)"
         ></textarea>
-
-        <!-- ── Mode Selector ──────────────────────────────────────────── -->
-        <div class="mb-2 p-2 rounded-3" style="background:rgba(255,255,255,0.04);border:1px solid var(--border)">
-          <div class="small fw-semibold mb-2" style="color:var(--text-muted)">Chế độ tạo PPTX</div>
-          <div class="d-flex gap-2">
-
-            <!-- Option 1: Tạo mới -->
-            <label class="flex-fill d-flex align-items-start gap-2 p-2 rounded-2 cursor-pointer mode-card" id="mode-new-card"
-                   style="border:2px solid var(--primary);background:rgba(92,107,192,0.1);cursor:pointer">
-              <input class="form-check-input mt-1 flex-shrink-0" type="radio" name="pptxMode"
-                     id="modeNew" value="new" checked>
-              <div>
-                <span class="fw-semibold d-block" style="font-size:0.82rem">✨ Tạo mới PPTX</span>
-                <small style="color:var(--text-muted);font-size:0.72rem">SVG nhúng trực tiếp, thiết kế tự do</small>
-              </div>
-            </label>
-
-            <!-- Option 2: Map vào master -->
-            <label class="flex-fill d-flex align-items-start gap-2 p-2 rounded-2 cursor-pointer mode-card" id="mode-master-card"
-                   style="border:2px solid var(--border);background:rgba(255,255,255,0.03);cursor:pointer">
-              <input class="form-check-input mt-1 flex-shrink-0" type="radio" name="pptxMode"
-                     id="modeMaster" value="master">
-              <div>
-                <span class="fw-semibold d-block" style="font-size:0.82rem">🎨 Map vào Master Slide</span>
-                <small style="color:var(--text-muted);font-size:0.72rem">Kế thừa font, màu, layout từ template</small>
-              </div>
-            </label>
-
-          </div>
-        </div>
-
-        <!-- ── Master Upload Panel (ẩn mặc định) ────────────────────── -->
-        <div id="masterUploadPanel" class="mb-2 rounded-3 d-none" style="border:1px solid #5c6bc0;overflow:hidden">
-          <div class="px-3 py-2 fw-semibold" style="background:rgba(92,107,192,0.18);font-size:0.8rem;color:#9fa8da">
-            <i class="bi bi-file-earmark-ppt-fill me-1"></i>Upload Master Slide (.pptx)
-          </div>
-          <div class="p-3">
-
-            <!-- File picker + nút upload -->
-            <div class="input-group input-group-sm mb-2">
-              <input type="file" class="form-control form-control-sm" id="masterFileInput" accept=".pptx"
-                     style="background:var(--bg-input);border-color:var(--border);color:var(--text)">
-              <button class="btn btn-sm text-white" id="btnUploadMaster"
-                      style="background:linear-gradient(135deg,#5c6bc0,#3949ab);border:none;min-width:80px">
-                <i class="bi bi-upload me-1"></i>Upload
-              </button>
-            </div>
-
-            <!-- Loading -->
-            <div id="masterUploadLoading" class="d-none text-center py-2" style="font-size:0.8rem;color:var(--text-muted)">
-              <div class="spinner-border spinner-border-sm me-2"></div>Đang phân tích master slide...
-            </div>
-
-            <!-- Error -->
-            <div id="masterUploadError" class="d-none rounded-2 px-3 py-2"
-                 style="background:rgba(239,83,80,0.12);border:1px solid rgba(239,83,80,0.3);color:#ef9a9a;font-size:0.79rem"></div>
-
-            <!-- Trạng thái master đã upload -->
-            <div id="masterStatus" class="d-none">
-              <div class="rounded-2 px-3 py-2 mb-2"
-                   style="background:rgba(38,166,90,0.12);border:1px solid rgba(38,166,90,0.3);color:#a5d6a7;font-size:0.79rem">
-                <i class="bi bi-check-circle-fill me-1"></i>
-                <strong>Master sẵn sàng:</strong> <span id="masterFilename"></span>
-              </div>
-              <div class="row g-2" style="font-size:0.76rem">
-                <div class="col-sm-8">
-                  <span style="color:var(--text-muted);font-weight:600">Layouts có sẵn:</span>
-                  <div id="masterLayoutsList" class="mt-1"></div>
-                </div>
-                <div class="col-sm-4">
-                  <span style="color:var(--text-muted);font-weight:600">Font mặc định:</span>
-                  <div id="masterDefaultFont" class="mt-1" style="color:var(--text)"></div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
 
         <!-- Các nút hành động -->
         <div class="d-flex gap-2 align-items-center mb-2">
@@ -644,26 +684,29 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Biến global
    ═════════════════════════════════════════════════════════════════════════ */
-let promptTemplate = "";
+let promptTemplates   = { new: "", master: "" };
+let currentMode       = "new";   // "new" | "master"
 let currentPromptText = "";
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Khởi tạo: Tải prompt template từ server, rồi render ngay
+   Khởi tạo
    ═════════════════════════════════════════════════════════════════════════ */
 document.addEventListener("DOMContentLoaded", async function () {
+
+  // ── Tải cả 2 prompt templates từ server ──────────────────────────────
   try {
     const response = await fetch("/api/prompt");
     if (response.ok) {
       const data = await response.json();
-      promptTemplate = data.ai_prompt_template || "";
-      document.getElementById("promptEditArea").value = promptTemplate;
-      renderPrompt(); // render ngay với giá trị form mặc định
+      promptTemplates.new    = data.prompt_new    || "";
+      promptTemplates.master = data.prompt_master || "";
+      renderPrompt();
     }
   } catch (err) {
     console.error("Lỗi tải prompt:", err);
   }
 
-  // Gắn listener cho toggle icon chevron
+  // ── Chevron toggle ─────────────────────────────────────────────────
   const collapseEl = document.getElementById("prompt-collapse");
   collapseEl.addEventListener("show.bs.collapse", () => {
     document.querySelector("#btn-toggle-prompt i").className = "bi bi-chevron-up";
@@ -672,18 +715,119 @@ document.addEventListener("DOMContentLoaded", async function () {
     document.querySelector("#btn-toggle-prompt i").className = "bi bi-chevron-down";
   });
 
-  // Khi mở modal, load template mới nhất vào textarea
+  // ── Mode radio listeners ──────────────────────────────────────────
+  document.querySelectorAll('input[name="pptxMode"]').forEach(function(radio) {
+    radio.addEventListener("change", function() {
+      currentMode = this.value;
+      updateModeUI();
+      renderPrompt();
+    });
+  });
+
+  // ── Modal open: load cả 2 textareas, active tab đúng mode ─────────
   document.getElementById("promptEditModal").addEventListener("show.bs.modal", () => {
-    document.getElementById("promptEditArea").value = promptTemplate;
+    document.getElementById("promptEditAreaNew").value    = promptTemplates.new;
+    document.getElementById("promptEditAreaMaster").value = promptTemplates.master;
+    // Kích hoạt tab ứng với mode đang dùng
+    activateModalTab(currentMode);
     hideModalAlert();
   });
+
+  // ── Tab switcher trong modal ──────────────────────────────────────
+  document.querySelectorAll("[data-prompt-tab]").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      activateModalTab(this.getAttribute("data-prompt-tab"));
+    });
+  });
+
+  // Khởi tạo UI đúng trạng thái ban đầu
+  updateModeUI();
 });
 
+/* ─── Cập nhật UI khi đổi mode ─────────────────────────────────────────── */
+function updateModeUI() {
+  const isMaster  = currentMode === "master";
+  const newCard    = document.getElementById("mode-new-card");
+  const masterCard = document.getElementById("mode-master-card");
+
+  // Highlight card
+  if (isMaster) {
+    newCard.style.borderColor    = "var(--border)";
+    newCard.style.background     = "rgba(255,255,255,0.03)";
+    masterCard.style.borderColor = "var(--primary)";
+    masterCard.style.background  = "rgba(92,107,192,0.1)";
+  } else {
+    newCard.style.borderColor    = "var(--primary)";
+    newCard.style.background     = "rgba(92,107,192,0.1)";
+    masterCard.style.borderColor = "var(--border)";
+    masterCard.style.background  = "rgba(255,255,255,0.03)";
+  }
+
+  // Show/hide master upload panel
+  document.getElementById("masterUploadPanel").classList.toggle("d-none", !isMaster);
+
+  // Cập nhật badge ở ô Prompt (Bước 1)
+  const promptBadge = document.getElementById("promptModeBadge");
+  if (promptBadge) {
+    if (isMaster) {
+      promptBadge.textContent     = "🎨 Map Master";
+      promptBadge.style.background = "rgba(92,107,192,0.2)";
+      promptBadge.style.color      = "#9fa8da";
+    } else {
+      promptBadge.textContent     = "✨ Tạo mới";
+      promptBadge.style.background = "rgba(33,150,243,0.15)";
+      promptBadge.style.color      = "#90caf9";
+    }
+  }
+
+  // Cập nhật badge ở tiêu đề Bước 2
+  const step2Badge = document.getElementById("step2ModeBadge");
+  if (step2Badge) {
+    if (isMaster) {
+      step2Badge.textContent      = "🎨 Map Master";
+      step2Badge.style.background = "rgba(92,107,192,0.25)";
+      step2Badge.style.color      = "#c5cae9";
+    } else {
+      step2Badge.textContent      = "✨ Tạo mới";
+      step2Badge.style.background = "rgba(33,150,243,0.2)";
+      step2Badge.style.color      = "#90caf9";
+    }
+  }
+}
+
+/* ─── Kích hoạt tab trong modal ─────────────────────────────────────────── */
+function activateModalTab(tab) {
+  const isMaster = tab === "master";
+
+  // Tab nav active state
+  document.getElementById("tabPromptNew").classList.toggle("active", !isMaster);
+  document.getElementById("tabPromptMaster").classList.toggle("active", isMaster);
+
+  // Show/hide textareas (dùng classList để tránh Bootstrap d-none !important override)
+  const areaNew    = document.getElementById("promptEditAreaNew");
+  const areaMaster = document.getElementById("promptEditAreaMaster");
+  areaNew.classList.toggle("d-none", isMaster);
+  areaMaster.classList.toggle("d-none", !isMaster);
+
+  // Show/hide master variable note
+  const varNote = document.getElementById("masterVarNote");
+  if (varNote) varNote.style.display = isMaster ? "inline" : "none";
+
+  // Label "đang lưu mode..."
+  const savingLabel = document.getElementById("modalSavingMode");
+  if (savingLabel) {
+    savingLabel.textContent = isMaster
+      ? "Đang chỉnh: Prompt Map Master"
+      : "Đang chỉnh: Prompt Tạo mới";
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
-   Hàm render prompt — gọi mỗi khi input thay đổi
+   Hàm render prompt — gọi mỗi khi input thay đổi hoặc đổi mode
    ═════════════════════════════════════════════════════════════════════════ */
 function renderPrompt() {
-  if (!promptTemplate) return;
+  const template = promptTemplates[currentMode] || "";
+  if (!template) return;
 
   const topic     = document.getElementById("topic").value.trim() || "[Chủ đề của bạn]";
   const numSlides = document.getElementById("num_slides").value;
@@ -691,7 +835,7 @@ function renderPrompt() {
   const style     = document.getElementById("style").value;
 
   // Thay thế biến
-  currentPromptText = promptTemplate
+  currentPromptText = template
     .replace("{topic}",      topic)
     .replace("{num_slides}", numSlides)
     .replace("{language}",   language)
@@ -736,10 +880,18 @@ document.getElementById("btn-copy-prompt").addEventListener("click", function ()
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Nút Save Prompt trong modal
+   Nút Save Prompt trong modal — lưu theo tab đang active
    ═════════════════════════════════════════════════════════════════════════ */
 document.getElementById("btnSavePrompt").addEventListener("click", async function () {
-  const newPrompt = document.getElementById("promptEditArea").value.trim();
+  // Xác định tab nào đang active
+  const activeTab = document.getElementById("tabPromptMaster").classList.contains("active")
+    ? "master" : "new";
+
+  const textarea  = activeTab === "master"
+    ? document.getElementById("promptEditAreaMaster")
+    : document.getElementById("promptEditAreaNew");
+
+  const newPrompt = textarea.value.trim();
 
   if (!newPrompt) {
     showModalAlert("warning", "Prompt không được để trống.");
@@ -753,15 +905,17 @@ document.getElementById("btnSavePrompt").addEventListener("click", async functio
     const response = await fetch("/api/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ai_prompt_template: newPrompt }),
+      body: JSON.stringify({ mode: activeTab, template: newPrompt }),
     });
 
     const data = await response.json();
 
     if (data.success) {
-      promptTemplate = newPrompt;
-      renderPrompt(); // re-render với template mới
-      showModalAlert("success", "✓ Đã lưu prompt thành công.");
+      promptTemplates[activeTab] = newPrompt;
+      // Re-render nếu tab vừa lưu là mode đang dùng
+      if (activeTab === currentMode) renderPrompt();
+      const label = activeTab === "master" ? "Prompt Map Master" : "Prompt Tạo mới";
+      showModalAlert("success", `✓ Đã lưu ${label} thành công.`);
       setTimeout(() => {
         bootstrap.Modal.getInstance(document.getElementById("promptEditModal")).hide();
       }, 1200);
@@ -998,35 +1152,13 @@ document.getElementById("btn-generate").addEventListener("click", async function
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Master Slide Mode Logic
+   Master Upload
    ═════════════════════════════════════════════════════════════════════════ */
 
 /** Lấy mode đang chọn: 'new' hoặc 'master' */
 function getSelectedMode() {
-  return document.querySelector('input[name="pptxMode"]:checked')?.value || "new";
+  return currentMode;
 }
-
-// Toggle hiển thị panel upload khi chọn mode
-document.querySelectorAll('input[name="pptxMode"]').forEach(function(radio) {
-  radio.addEventListener("change", function() {
-    const isMaster = this.value === "master";
-    document.getElementById("masterUploadPanel").classList.toggle("d-none", !isMaster);
-    // Highlight card được chọn
-    const newCard    = document.getElementById("mode-new-card");
-    const masterCard = document.getElementById("mode-master-card");
-    if (isMaster) {
-      newCard.style.borderColor    = "var(--border)";
-      newCard.style.background     = "rgba(255,255,255,0.03)";
-      masterCard.style.borderColor = "var(--primary)";
-      masterCard.style.background  = "rgba(92,107,192,0.1)";
-    } else {
-      newCard.style.borderColor    = "var(--primary)";
-      newCard.style.background     = "rgba(92,107,192,0.1)";
-      masterCard.style.borderColor = "var(--border)";
-      masterCard.style.background  = "rgba(255,255,255,0.03)";
-    }
-  });
-});
 
 // Upload master file
 document.getElementById("btnUploadMaster").addEventListener("click", async function() {
@@ -1046,6 +1178,14 @@ document.getElementById("btnUploadMaster").addEventListener("click", async funct
 
   try {
     const res  = await fetch("/api/upload-master", { method: "POST", body: formData });
+
+    // Nếu server trả HTML (413, 500...) thì parse JSON sẽ crash → đọc text trước
+    const ct = res.headers.get("Content-Type") || "";
+    if (!ct.includes("application/json")) {
+      const text = await res.text();
+      throw new Error(`Server trả lỗi HTTP ${res.status} (không phải JSON). Kiểm tra kích thước file hoặc server log.`);
+    }
+
     const data = await res.json();
 
     document.getElementById("masterUploadLoading").classList.add("d-none");

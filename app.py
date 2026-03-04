@@ -22,7 +22,16 @@ from master_handler import parse_master_info
 
 # ─── Khởi tạo ứng dụng Flask ────────────────────────────────────────────────
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # Giới hạn 16 MB mỗi request
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # Giới hạn 16 MB mỗi request
+
+# ─── Error handlers trả JSON thay vì HTML ───────────────────────────────────
+@app.errorhandler(413)
+def request_too_large(e):
+    return jsonify({"success": False, "error": "File quá lớn (tối đa 16MB)."}), 413
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({"success": False, "error": f"Lỗi server nội bộ: {str(e)}"}), 500
 
 # Đường dẫn file prompt
 PROMPTS_FILE = Path(__file__).parent / "prompts.json"
@@ -65,28 +74,44 @@ def index():
 # ─── Route: Lấy prompt ──────────────────────────────────────────────────────
 @app.route("/api/prompt", methods=["GET"])
 def get_prompt():
-    """Trả về prompt template hiện tại từ file prompts.json."""
+    """
+    Trả về cả 2 prompt template:
+      - prompt_new    : prompt tạo PPTX mới (từ key ai_prompt_template)
+      - prompt_master : prompt map vào master slide
+    """
     prompts = load_prompts()
-    return jsonify(prompts)
+    return jsonify({
+        "prompt_new":    prompts.get("ai_prompt_template", ""),
+        "prompt_master": prompts.get("prompt_master", ""),
+    })
 
 
 # ─── Route: Lưu prompt ──────────────────────────────────────────────────────
 @app.route("/api/prompt", methods=["POST"])
 def save_prompt():
-    """Nhận prompt mới từ client và lưu vào file prompts.json."""
+    """
+    Lưu prompt template theo mode.
+    Body JSON: { "mode": "new"|"master", "template": "..." }
+    """
     try:
         data = request.get_json() or {}
-        
-        # Kiểm tra dữ liệu
-        if "ai_prompt_template" not in data:
-            return jsonify({"success": False, "error": "Thiếu trường 'ai_prompt_template'"}), 400
-        
-        # Lưu vào file
-        if save_prompts(data):
-            return jsonify({"success": True, "message": "Đã lưu prompt thành công"})
+        mode     = data.get("mode", "new")          # "new" hoặc "master"
+        template = data.get("template", "").strip()
+
+        if not template:
+            return jsonify({"success": False, "error": "Template không được để trống."}), 400
+
+        prompts = load_prompts()
+        if mode == "master":
+            prompts["prompt_master"] = template
+        else:  # "new" hoặc default
+            prompts["ai_prompt_template"] = template
+
+        if save_prompts(prompts):
+            return jsonify({"success": True, "message": f"Đã lưu prompt [{mode}] thành công."})
         else:
-            return jsonify({"success": False, "error": "Lỗi lưu file"}), 500
-            
+            return jsonify({"success": False, "error": "Lỗi lưu file."}), 500
+
     except Exception as exc:
         app.logger.error("Lỗi lưu prompt: %s", exc)
         return jsonify({"success": False, "error": str(exc)}), 500
