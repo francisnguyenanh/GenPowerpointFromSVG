@@ -705,6 +705,7 @@
 let promptTemplates   = { new: "", master: "" };
 let currentMode       = "new";   // "new" | "master"
 let currentPromptText = "";
+let masterLoaded      = false;   // được set sau khi gọi /api/master-status
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Khởi tạo
@@ -722,6 +723,27 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
   } catch (err) {
     console.error("Lỗi tải prompt:", err);
+  }
+
+  // ── Kiểm tra master slide (auto-load từ input/) ────────────────────
+  try {
+    const sr   = await fetch("/api/master-status");
+    const sdat = await sr.json();
+    masterLoaded = !!sdat.loaded;
+    const badge = document.getElementById("masterStatusBadge");
+    if (badge) {
+      if (masterLoaded) {
+        badge.innerHTML =
+          `<div class="rounded-2 px-3 py-2" style="background:rgba(38,166,90,0.12);border:1px solid rgba(38,166,90,0.3);color:#a5d6a7;font-size:0.8rem">` +
+          `<i class="bi bi-check-circle-fill me-2"></i><strong>Sẵn sàng:</strong> ${escapeHtml(sdat.filename)}</div>`;
+      } else {
+        badge.innerHTML =
+          `<div class="rounded-2 px-3 py-2" style="background:rgba(255,160,0,0.12);border:1px solid rgba(255,160,0,0.35);color:#ffcc80;font-size:0.8rem">` +
+          `<i class="bi bi-exclamation-triangle-fill me-2"></i>Không tìm thấy file .pptx trong thư mục <code>input/</code>.</div>`;
+      }
+    }
+  } catch (err) {
+    console.warn("Kiểm tra master thất bại:", err);
   }
 
   // ── Chevron toggle ─────────────────────────────────────────────────
@@ -1114,13 +1136,11 @@ document.getElementById("btn-generate").addEventListener("click", async function
   // Kiểm tra nếu đang ở chế độ master
   const mode = getSelectedMode();
   if (mode === "master") {
-    const masterReady = !document.getElementById("masterStatus").classList.contains("d-none");
-    if (!masterReady) {
+    if (!masterLoaded) {
       showAlert("warning",
         '<i class="bi bi-exclamation-triangle-fill me-2"></i>' +
-        'Vui lòng upload file Master Slide (.pptx) trước khi tạo PPTX.'
+        'Không tìm thấy master slide. Vui lòng đặt file <strong>.pptx</strong> vào thư mục <code>input/</code> và khởi động lại server.'
       );
-      document.getElementById("masterUploadPanel").classList.remove("d-none");
       return;
     }
   }
@@ -1170,90 +1190,13 @@ document.getElementById("btn-generate").addEventListener("click", async function
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Master Upload
+   Hỗ trợ Master Slide
    ═════════════════════════════════════════════════════════════════════════ */
 
 /** Lấy mode đang chọn: 'new' hoặc 'master' */
 function getSelectedMode() {
   return currentMode;
 }
-
-// Upload master file
-document.getElementById("btnUploadMaster").addEventListener("click", async function() {
-  const fileInput = document.getElementById("masterFileInput");
-  if (!fileInput.files.length) {
-    showMasterError("Vui lòng chọn file .pptx trước.");
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("master_file", fileInput.files[0]);
-
-  document.getElementById("masterUploadLoading").classList.remove("d-none");
-  document.getElementById("masterUploadError").classList.add("d-none");
-  document.getElementById("masterStatus").classList.add("d-none");
-  this.disabled = true;
-
-  try {
-    const res  = await fetch("/api/upload-master", { method: "POST", body: formData });
-
-    // Nếu server trả HTML (413, 500...) thì parse JSON sẽ crash → đọc text trước
-    const ct = res.headers.get("Content-Type") || "";
-    if (!ct.includes("application/json")) {
-      const text = await res.text();
-      throw new Error(`Server trả lỗi HTTP ${res.status} (không phải JSON). Kiểm tra kích thước file hoặc server log.`);
-    }
-
-    const data = await res.json();
-
-    document.getElementById("masterUploadLoading").classList.add("d-none");
-
-    if (data.success) {
-      document.getElementById("masterFilename").textContent = data.filename;
-      document.getElementById("masterDefaultFont").textContent = data.default_font || "Không xác định";
-      const layoutsHtml = (data.layouts || [])
-        .map(l => `<span class="badge me-1 mb-1" style="background:rgba(92,107,192,0.25);color:#c5cae9;border:1px solid rgba(92,107,192,0.4)">${escapeHtml(l.name)}</span>`)
-        .join("");
-      document.getElementById("masterLayoutsList").innerHTML = layoutsHtml || '<span style="color:var(--text-muted)">Không có layout</span>';
-      document.getElementById("masterStatus").classList.remove("d-none");
-
-      // Hiển thị dynamic prompt nếu có
-      if (data.dynamic_prompt) {
-        document.getElementById("dynamicPromptDisplay").value = data.dynamic_prompt;
-        document.getElementById("dynamicPromptPanel").classList.remove("d-none");
-      } else {
-        document.getElementById("dynamicPromptPanel").classList.add("d-none");
-      }
-    } else {
-      showMasterError(data.error || "Lỗi không xác định.");
-    }
-  } catch (err) {
-    document.getElementById("masterUploadLoading").classList.add("d-none");
-    showMasterError("Lỗi kết nối: " + err.message);
-  } finally {
-    this.disabled = false;
-  }
-});
-
-function showMasterError(msg) {
-  const el = document.getElementById("masterUploadError");
-  el.textContent = msg;
-  el.classList.remove("d-none");
-}
-
-// Copy dynamic prompt button
-document.getElementById("btnCopyDynamicPrompt").addEventListener("click", async function() {
-  const text = document.getElementById("dynamicPromptDisplay").value;
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-    this.innerHTML = '<i class="bi bi-clipboard-check me-1"></i>Đã copy!';
-    setTimeout(() => { this.innerHTML = '<i class="bi bi-clipboard me-1"></i>Copy Prompt'; }, 2000);
-  } catch {
-    document.getElementById("dynamicPromptDisplay").select();
-    document.execCommand("copy");
-  }
-});
 
 
 /* ═══════════════════════════════════════════════════════════════════════════

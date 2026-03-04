@@ -19,8 +19,6 @@ from svg_processor import extract_slides_from_svg, validate_svg_input
 from pptx_builder import build_pptx_from_slides, build_pptx_from_slides_with_master
 from svg_fixer import fix_svg
 from master_handler import parse_master_info
-from master_analyzer import analyze_master
-from prompt_injector import inject_master_into_prompt
 
 # ─── Khởi tạo ứng dụng Flask ────────────────────────────────────────────────
 app = Flask(__name__)
@@ -38,12 +36,70 @@ def internal_error(e):
 # Đường dẫn file prompt
 PROMPTS_FILE = Path(__file__).parent / "prompts.json"
 
-# ─── Cache master PPTX trong memory ─────────────────────────────────────────
-# TODO: Upgrade lên Flask session + temp file nếu cần multi-user production
-_master_cache: dict = {}   # { "bytes": bytes, "info": dict, "filename": str, "schema": dict, "dynamic_prompt": str }
+# Thư mục lưu SVG từng slide
+OUTPUT_SVG_DIR = Path(__file__).parent / "output_svg"
+OUTPUT_SVG_DIR.mkdir(exist_ok=True)
+
+# Thư mục chứa file master PPTX cố định
+INPUT_DIR = Path(__file__).parent / "input"
+INPUT_DIR.mkdir(exist_ok=True)
+
+# ─── Cache master PPTX (tự động load từ input/) ──────────────────────────────
+_master_cache: dict = {}   # { "bytes": bytes, "info": dict, "filename": str }
+
+
+def _auto_load_master() -> bool:
+    """
+    Tự động tìm và load file .pptx đầu tiên trong thư mục input/.
+    Trả về True nếu load thành công, False nếu không tìm thấy.
+    """
+    pptx_files = sorted(INPUT_DIR.glob("*.pptx"))
+    if not pptx_files:
+        app.logger.warning("Không tìm thấy file .pptx nào trong input/")
+        return False
+    pptx_path = pptx_files[0]
+    try:
+        pptx_bytes = pptx_path.read_bytes()
+        master_info = parse_master_info(pptx_bytes)
+        _master_cache["bytes"]    = pptx_bytes
+        _master_cache["info"]     = master_info
+        _master_cache["filename"] = pptx_path.name
+        app.logger.info("Đã load master slide: %s", pptx_path.name)
+        return True
+    except Exception as exc:
+        app.logger.error("Lỗi load master từ input/: %s", exc)
+        return False
 
 
 # ─── Hàm tiện ích ───────────────────────────────────────────────────────────
+
+def save_slides_to_output_svg(slides: list, topic: str = "slide") -> list:
+    """
+    Lưu từng slide SVG thành file riêng vào thư mục output_svg/.
+    Tên file: output_svg/{safe_topic}_slide_{index:02d}.svg
+
+    Trả về danh sách đường dẫn đã lưu.
+    """
+    safe_topic = "".join(
+        c if c.isalnum() or c in ("-", "_") else "_"
+        for c in (topic or "slide").strip()
+    ).strip("_")[:40] or "slide"
+
+    saved = []
+    for slide in slides:
+        idx = slide.get("index", slide.get("id", 1))
+        svg_content = slide.get("svg", "")
+        if not svg_content:
+            continue
+        filepath = OUTPUT_SVG_DIR / f"{safe_topic}_slide_{int(idx):02d}.svg"
+        try:
+            filepath.write_text(svg_content, encoding="utf-8")
+            saved.append(filepath)
+        except Exception as exc:
+            app.logger.warning("Không lưu được SVG slide %s: %s", idx, exc)
+    return saved
+
+
 def load_prompts() -> dict:
     """Tải dữ liệu từ file prompts.json."""
     if not PROMPTS_FILE.exists():
@@ -184,7 +240,14 @@ def generate():
             )
         }), 400
 
-    # ── Bước 3: Tạo file PPTX ─────────────────────────────────────────────
+    # ── Bước 3: Lưu từng slide SVG ra output_svg/ ────────────────────────
+    try:
+        saved = save_slides_to_output_svg(slides, topic)
+        app.logger.info("Đã lưu %d slide SVG vào output_svg/", len(saved))
+    except Exception as exc:
+        app.logger.warning("save_slides_to_output_svg thất bại (non-critical): %s", exc)
+
+    # ── Bước 4: Tạo file PPTX ─────────────────────────────────────────────
     try:
         pptx_buffer = build_pptx_from_slides(slides)
     except Exception as exc:
@@ -194,7 +257,7 @@ def generate():
             "error": f"Lỗi khi tạo file PPTX: {str(exc)}"
         }), 500
 
-    # ── Bước 4: Trả về file để tải xuống ──────────────────────────────────
+    # ── Bước 5: Trả về file để tải xuống ──────────────────────────────────
     # Tạo tên file an toàn từ chủ đề (loại ký tự đặc biệt)
     safe_topic = "".join(
         c if c.isalnum() or c in (" ", "-", "_") else "_"
@@ -211,95 +274,31 @@ def generate():
     )
 
 
-# ─── Route: Upload Master Slide ─────────────────────────────────────────────
-@app.route("/api/upload-master", methods=["POST"])
-def upload_master():
+# ─── Route: Trạng thái master slide ─────────────────────────────────────────
+@app.route("/api/master-status", methods=["GET"])
+def get_master_status():
     """
-    Nhận file PPTX upload, parse master info + phân tích sâu schema,
-    inject schema vào prompt master, lưu vào cache tạm.
-    Form field: master_file (file .pptx)
-    Trả về: { success, filename, layouts, theme_colors, default_font, dynamic_prompt }
+    Kiểm tra xem master slide đã được load từ input/ hay chưa.
+    Trả về: { loaded: bool, filename: str }
     """
-    if "master_file" not in request.files:
-        return jsonify({"success": False, "error": "Không tìm thấy file"}), 400
-
-    file = request.files["master_file"]
-    if not file.filename or not file.filename.lower().endswith(".pptx"):
-        return jsonify({"success": False, "error": "Chỉ chấp nhận file .pptx"}), 400
-
-    pptx_bytes = file.read()
-    if len(pptx_bytes) > 100 * 1024 * 1024:  # Giới hạn 100MB
-        return jsonify({"success": False, "error": "File quá lớn (tối đa 100MB)"}), 400
-
-    # ── Bước 1: Parse master info (layouts cơ bản) ────────────────────────
-    try:
-        master_info = parse_master_info(pptx_bytes)
-    except Exception as exc:
-        app.logger.error("Lỗi parse master: %s", exc, exc_info=True)
-        return jsonify({"success": False, "error": f"Không thể đọc file PPTX: {str(exc)}"}), 400
-
-    # ── Bước 2: Phân tích sâu master schema (non-critical) ────────────────
-    schema = {}
-    try:
-        schema = analyze_master(pptx_bytes)
-    except Exception as exc:
-        app.logger.warning("Phân tích master schema thất bại (non-critical): %s", exc)
-
-    # ── Bước 3: Inject schema vào prompt master ───────────────────────────
-    dynamic_prompt = ""
-    try:
-        prompts = load_prompts()
-        prompt_template = prompts.get("prompt_master", "")
-        if prompt_template and schema:
-            dynamic_prompt = inject_master_into_prompt(prompt_template, schema)
-    except Exception as exc:
-        app.logger.warning("Inject prompt thất bại (non-critical): %s", exc)
-
-    # ── Bước 4: Lưu vào cache ─────────────────────────────────────────────
-    _master_cache["bytes"]          = pptx_bytes
-    _master_cache["info"]           = master_info
-    _master_cache["filename"]       = file.filename
-    _master_cache["schema"]         = schema
-    _master_cache["dynamic_prompt"] = dynamic_prompt
-
-    return jsonify({
-        "success":        True,
-        "filename":       file.filename,
-        "layouts":        [{"index": l["index"], "name": l["name"]} for l in master_info["layouts"]],
-        "theme_colors":   master_info["theme_colors"],
-        "default_font":   master_info["default_font"],
-        "dynamic_prompt": dynamic_prompt,
-    })
+    loaded   = bool(_master_cache.get("bytes"))
+    filename = _master_cache.get("filename", "")
+    return jsonify({"loaded": loaded, "filename": filename})
 
 
-# ─── Route: Lấy dynamic prompt theo master đã upload ────────────────────────
+# ─── Route: Lấy prompt master ────────────────────────────────────────────────
 @app.route("/api/master-prompt", methods=["GET"])
 def get_master_prompt():
     """
-    Trả về dynamic prompt đã được inject schema của master slide đang được cache.
-    Nếu chưa upload master → 404.
+    Trả về prompt_master từ prompts.json (không inject schema).
     """
-    if not _master_cache.get("bytes"):
-        return jsonify({"success": False, "error": "Chưa upload master slide."}), 404
-
-    dynamic_prompt = _master_cache.get("dynamic_prompt", "")
-
-    # Nếu cha có dynamic_prompt (schema build lỗi) → thử regenerate
-    if not dynamic_prompt:
-        try:
-            prompts = load_prompts()
-            prompt_template = prompts.get("prompt_master", "")
-            schema = _master_cache.get("schema", {})
-            if prompt_template:
-                dynamic_prompt = inject_master_into_prompt(prompt_template, schema)
-                _master_cache["dynamic_prompt"] = dynamic_prompt
-        except Exception as exc:
-            app.logger.warning("Regenerate dynamic prompt thất bại: %s", exc)
-
+    prompts = load_prompts()
+    prompt  = prompts.get("prompt_master", "")
     return jsonify({
-        "success":        True,
-        "filename":       _master_cache.get("filename", ""),
-        "dynamic_prompt": dynamic_prompt,
+        "success":  True,
+        "prompt":   prompt,
+        "filename": _master_cache.get("filename", ""),
+        "loaded":   bool(_master_cache.get("bytes")),
     })
 
 
@@ -314,7 +313,7 @@ def generate_with_master():
     if not _master_cache.get("bytes"):
         return jsonify({
             "success": False,
-            "error": "Chưa upload master slide. Vui lòng upload file .pptx trước."
+            "error": "Không tìm thấy master slide. Vui lòng đặt file .pptx vào thư mục input/."
         }), 400
 
     svg_code = request.form.get("svg_code", "").strip()
@@ -327,6 +326,13 @@ def generate_with_master():
     slides = extract_slides_from_svg(svg_code)
     if not slides:
         return jsonify({"success": False, "error": "Không tìm thấy slide nào."}), 400
+
+    # Lưu từng slide SVG ra output_svg/
+    try:
+        saved = save_slides_to_output_svg(slides, topic)
+        app.logger.info("Đã lưu %d slide SVG vào output_svg/", len(saved))
+    except Exception as exc:
+        app.logger.warning("save_slides_to_output_svg thất bại (non-critical): %s", exc)
 
     try:
         pptx_buffer = build_pptx_from_slides_with_master(
@@ -353,4 +359,6 @@ def generate_with_master():
 
 # ─── Chạy ứng dụng ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    with app.app_context():
+        _auto_load_master()
     app.run(debug=True, host="0.0.0.0", port=5000)

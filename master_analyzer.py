@@ -15,24 +15,70 @@ Thông tin trích xuất:
 import io
 from lxml import etree
 from pptx import Presentation
-from pptx.util import Pt
 
-# ─── Tỉ lệ chuyển đổi EMU → px (chuẩn 1280×720) ────────────────────────────
-_EMU_TO_PX_X = 1280 / 9144000
-_EMU_TO_PX_Y = 720  / 5143500
+# ─── Target canvas (normalize tất cả EMU về đây) ──────────────────────────────────
+_DEFAULT_TARGET_W_PX = 1280
+_DEFAULT_TARGET_H_PX = 720
+# Scale được tính động trong analyze_master() từ prs.slide_width/height
 
-# ─── Map tên layout → data-layout value dùng trong SVG ──────────────────────
+# ─── Map tên layout (multi-language) → data-layout value dùng trong SVG ────────
 _LAYOUT_NAME_MAP = {
-    "title slide":          "title-slide",
-    "title and content":    "content",
-    "two content":          "two-column",
-    "comparison":           "two-column",
-    "section header":       "section-header",
-    "blank":                "blank",
-    "content with caption": "content",
-    "picture with caption": "content",
-    "title only":           "section-header",
+    # Tiếng Anh
+    "title slide":                      "title-slide",
+    "title and content":                "content",
+    "two content":                      "two-column",
+    "comparison":                       "comparison",
+    "section header":                   "section-header",
+    "blank":                            "blank",
+    "content with caption":             "content-caption",
+    "picture with caption":             "picture-caption",
+    "title only":                       "title-only",
+
+    # Tiếng Nhật (VTI master ver1 + ver2)
+    "タイトル スライド":                 "title-slide",
+    "タイトルとコンテンツ":              "content",
+    "セクション見出し":                  "section-header",
+    "2 つのコンテンツ":                  "two-column",
+    "比較":                              "comparison",
+    "タイトルのみ":                      "title-only",
+    "タイトル付きのコンテンツ":          "content-caption",
+    "タイトル付きの図":                  "picture-caption",
+    "タイトルと縦書きテキスト":          "content",
+    "縦書きタイトルと\n縦書きテキスト":  "content",
+    "白紙":                              "blank",
+
+    # Korean
+    "제목 슬라이드":                     "title-slide",
+    "제목 및 내용":                      "content",
+    "두 내용":                           "two-column",
+    "구역 머리글":                    "section-header",
+
+    # Chinese
+    "标题幻灯片":                        "title-slide",
+    "标题和内容":                        "content",
+    "两栏内容":                          "two-column",
+    "节标题":                            "section-header",
 }
+
+# ─── Japanese / alias font fallback chains ──────────────────────────────────
+_FONT_FALLBACK_MAP = {
+    "游ゴシック light":   "Yu Gothic Light, Meiryo, Arial, sans-serif",
+    "yu gothic light":    "Yu Gothic Light, Meiryo, Arial, sans-serif",
+    "游ゴシック":          "Yu Gothic, Meiryo, Arial, sans-serif",
+    "yu gothic":          "Yu Gothic, Meiryo, Arial, sans-serif",
+    "游明朝":              "Yu Mincho, Times New Roman, serif",
+    "メイリオ":            "Meiryo, Arial, sans-serif",
+    "meiryo":             "Meiryo, Arial, sans-serif",
+    "+mj-ea":             "Yu Gothic Light, Meiryo, sans-serif",
+    "+mn-ea":             "Yu Gothic, Meiryo, sans-serif",
+    "+mj-lt":             "Calibri Light, Arial, sans-serif",
+    "+mn-lt":             "Calibri, Arial, sans-serif",
+}
+
+
+def _resolve_font(font_name: str) -> str:
+    """Thêm fallback chain cho Japanese/alias fonts."""
+    return _FONT_FALLBACK_MAP.get(font_name.lower().strip(), font_name)
 
 # ─── Map placeholder idx → type string ──────────────────────────────────────
 _PH_IDX_TYPE_MAP = {
@@ -48,19 +94,19 @@ _PH_IDX_TYPE_MAP = {
 }
 
 
-def _emu_to_px(emu_val, axis: str = "x") -> int:
-    """Chuyển đổi EMU sang pixel (làm tròn)."""
-    ratio = _EMU_TO_PX_X if axis == "x" else _EMU_TO_PX_Y
-    return round(int(emu_val or 0) * ratio)
+def _emu_to_px(emu_val: int, scale: float) -> int:
+    """Chuyển đổi EMU → px dùng scale động từ file thực tế."""
+    return round(int(emu_val or 0) * scale)
 
 
 def _extract_theme_data(prs: Presentation) -> dict:
     """
     Đọc theme colors và font names từ XML nội bộ của slide master.
-    Trả về dict với keys: fonts {heading, body}, colors {dk1, lt1, ...accent1-6}.
-    Tất cả exception được catch silently → fallback về default values.
+    Trả về dict với keys: fonts {heading, body, heading_raw, body_raw},
+    colors {dk1, lt1, ...accent1-6}.
     """
-    fonts  = {"heading": "Calibri Light", "body": "Calibri"}
+    fonts  = {"heading": "Calibri Light", "body": "Calibri",
+              "heading_raw": "", "body_raw": ""}
     colors = {}
 
     try:
@@ -82,9 +128,13 @@ def _extract_theme_data(prs: Presentation) -> dict:
                 major = theme_xml.find(".//a:fontScheme/a:majorFont/a:latin", ns)
                 minor = theme_xml.find(".//a:fontScheme/a:minorFont/a:latin", ns)
                 if major is not None and major.get("typeface"):
-                    fonts["heading"] = major.get("typeface")
+                    raw = major.get("typeface")
+                    fonts["heading_raw"] = raw
+                    fonts["heading"]     = _resolve_font(raw)
                 if minor is not None and minor.get("typeface"):
-                    fonts["body"] = minor.get("typeface")
+                    raw = minor.get("typeface")
+                    fonts["body_raw"] = raw
+                    fonts["body"]     = _resolve_font(raw)
             except Exception:
                 pass
 
@@ -163,7 +213,6 @@ def _extract_bullet_levels(ph) -> list:
     """
     Đọc font size theo từng cấp indent trong body placeholder.
     Trả về list[{"level": int, "font_size_pt": int, "indent_px": int}].
-    Tất cả exception được catch silently → fallback về defaults.
     """
     ns_a = "http://schemas.openxmlformats.org/drawingml/2006/main"
     levels = []
@@ -174,15 +223,15 @@ def _extract_bullet_levels(ph) -> list:
             raise ValueError("no txBody")
 
         for i in range(1, 4):
-            tag = f"lvl{i}pPr"
-            sz_pt = 18  # default
+            tag   = f"lvl{i}pPr"
+            sz_pt = 18
             try:
                 node = tx_body.find(f".//{{{ns_a}}}{tag}")
                 if node is not None:
                     def_rpr = node.find(f"{{{ns_a}}}defRPr")
                     if def_rpr is not None:
                         sz_raw = def_rpr.get("sz")
-                        if sz_raw:
+                        if sz_raw and sz_raw.isdigit():
                             sz_pt = int(sz_raw) // 100
             except Exception:
                 pass
@@ -201,6 +250,108 @@ def _extract_bullet_levels(ph) -> list:
     return levels
 
 
+def _extract_ph_font_info(ph) -> dict:
+    """
+    Đọc font từ lstStyle/lvl1pPr/defRPr trong XML của placeholder.
+    Đây là cách đúng cho master/layout placeholders (không dùng text_frame.runs
+    vì master placeholders thường không có runs).
+
+    VTI ver2 verified values:
+      Layout[1] title:    Meiryo 36pt BOLD #0050AD
+      Layout[0] title:    Meiryo 60pt BOLD #0050AD align=ctr
+      Layout[0] subtitle: Meiryo 24pt align=ctr
+      slide_number:       Meiryo 16pt BOLD color=scheme:bg1
+    """
+    ns_a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    result = {
+        "font_size_pt": 18,
+        "font_bold":    False,
+        "font_color":   "",
+        "font_name":    "",
+        "align":        "",
+    }
+    try:
+        txBody = ph._element.find(f"{{{ns_a}}}txBody")
+        if txBody is None:
+            return result
+        lstStyle = txBody.find(f"{{{ns_a}}}lstStyle")
+        if lstStyle is None:
+            return result
+        lvl1 = lstStyle.find(f"{{{ns_a}}}lvl1pPr")
+        if lvl1 is None:
+            return result
+
+        result["align"] = lvl1.get("algn", "")
+
+        defRPr = lvl1.find(f"{{{ns_a}}}defRPr")
+        if defRPr is None:
+            return result
+
+        sz = defRPr.get("sz")
+        if sz and sz.isdigit():
+            result["font_size_pt"] = int(sz) // 100
+
+        result["font_bold"] = defRPr.get("b") == "1"
+
+        latin = defRPr.find(f"{{{ns_a}}}latin")
+        if latin is not None:
+            result["font_name"] = _resolve_font(latin.get("typeface", ""))
+
+        srgb = defRPr.find(f".//{{{ns_a}}}srgbClr")
+        if srgb is not None:
+            result["font_color"] = f"#{srgb.get('val', '').upper()}"
+        else:
+            schClr = defRPr.find(f".//{{{ns_a}}}schemeClr")
+            if schClr is not None:
+                result["font_color"] = f"scheme:{schClr.get('val', '')}"
+
+    except Exception:
+        pass
+    return result
+
+
+def _calc_content_zone(
+    placeholders: list,
+    scale_x: float,
+    scale_y: float,
+    w_px: int,
+    h_px: int,
+) -> dict:
+    """
+    Tính vùng content tự do dựa trên các placeholder đã có.
+    Logic: content zone = phần slide không bị chiếm bởi title/footer/slide_number.
+
+    Trả về {"x": int, "y": int, "w": int, "h": int} (px, canvas base).
+    """
+    MARGIN        = 8
+    header_bottom = MARGIN
+    footer_top    = h_px - MARGIN
+
+    for ph in placeholders:
+        ph_type = ph.get("type", "")
+        t = ph.get("top_px", 0)
+        h = ph.get("height_px", 0)
+        b = t + h
+
+        if ph_type in ("center_title", "title", "date") and t < h_px // 2:
+            if b + MARGIN > header_bottom:
+                header_bottom = b + MARGIN
+
+        if ph_type in ("slide_number", "footer") and t > h_px // 2:
+            if t - MARGIN < footer_top:
+                footer_top = t - MARGIN
+
+    left  = round(8 / 1280 * w_px)
+    right = w_px - left
+
+    return {
+        "x": left,
+        "y": header_bottom,
+        "w": right - left,
+        "h": max(0, footer_top - header_bottom),
+    }
+
+
 def analyze_master(pptx_bytes: bytes) -> dict:
     """
     Hàm chính: phân tích PPTX và trả về master schema đầy đủ.
@@ -210,30 +361,25 @@ def analyze_master(pptx_bytes: bytes) -> dict:
     {
       "meta": {
         "slide_width_emu": int, "slide_height_emu": int,
-        "slide_width_px": 1280, "slide_height_px": 720
+        "slide_width_px": 1280, "slide_height_px": 720,
+        "emu_scale_x": float, "emu_scale_y": float
       },
       "theme": {
-        "fonts": {"heading": str, "body": str},
-        "colors": {"dk1": "#hex", "lt1": "#hex", "accent1": "#hex", ...}
+        "fonts": {"heading": str, "body": str, "heading_raw": str, "body_raw": str},
+        "colors": {"dk1": "#hex", ...}
       },
       "layouts": [
         {
-          "index": int,
-          "name": str,
-          "data_layout_value": str,
-          "background": {"type": str, "colors": [str]},
+          "index": int, "name": str, "data_layout_value": str,
+          "background": {...},
+          "content_zone": {"x": int, "y": int, "w": int, "h": int},
           "placeholders": [
             {
-              "idx": int,
-              "type": str,
-              "label": str,
-              "left_px": int, "top_px": int,
-              "width_px": int, "height_px": int,
-              "left_emu": int, "top_emu": int,
-              "width_emu": int, "height_emu": int,
-              "font_size_pt": int,
-              "font_bold": bool,
-              "font_color": str,
+              "idx": int, "type": str, "label": str,
+              "left_px": int, "top_px": int, "width_px": int, "height_px": int,
+              "left_emu": int, "top_emu": int, "width_emu": int, "height_emu": int,
+              "font_size_pt": int, "font_bold": bool, "font_color": str,
+              "font_name": str, "align": str,
               "bullet_levels": [...]   # chỉ có khi type == "body"
             }
           ]
@@ -246,12 +392,20 @@ def analyze_master(pptx_bytes: bytes) -> dict:
     except Exception as exc:
         raise ValueError(f"Không thể đọc file PPTX: {exc}") from exc
 
+    # ── Scale động theo kích thước thực tế ──────────────────────────────────
+    _w_emu   = int(prs.slide_width)
+    _h_emu   = int(prs.slide_height)
+    _scale_x = _DEFAULT_TARGET_W_PX / _w_emu
+    _scale_y = _DEFAULT_TARGET_H_PX / _h_emu
+
     schema = {
         "meta": {
-            "slide_width_emu":  int(prs.slide_width),
-            "slide_height_emu": int(prs.slide_height),
-            "slide_width_px":   1280,
-            "slide_height_px":  720,
+            "slide_width_emu":  _w_emu,
+            "slide_height_emu": _h_emu,
+            "slide_width_px":   _DEFAULT_TARGET_W_PX,
+            "slide_height_px":  _DEFAULT_TARGET_H_PX,
+            "emu_scale_x":      _scale_x,
+            "emu_scale_y":      _scale_y,
         },
         "theme":   _extract_theme_data(prs),
         "layouts": [],
@@ -259,7 +413,7 @@ def analyze_master(pptx_bytes: bytes) -> dict:
 
     for idx, layout in enumerate(prs.slide_layouts):
         try:
-            name = (layout.name or f"Layout {idx}").strip()
+            name        = (layout.name or f"Layout {idx}").strip()
             data_layout = _LAYOUT_NAME_MAP.get(name.lower(), "content")
 
             layout_info = {
@@ -275,7 +429,7 @@ def analyze_master(pptx_bytes: bytes) -> dict:
                     ph_idx  = ph.placeholder_format.idx
                     ph_type = _PH_IDX_TYPE_MAP.get(ph_idx, "body")
 
-                    # ── Tọa độ ───────────────────────────────────────────
+                    # ── Tọa độ ───────────────────────────────────────────────────
                     try:
                         left   = int(ph.left   or 0)
                         top    = int(ph.top    or 0)
@@ -284,23 +438,13 @@ def analyze_master(pptx_bytes: bytes) -> dict:
                     except Exception:
                         left = top = width = height = 0
 
-                    # ── Font từ text frame ────────────────────────────────
-                    font_size_pt = 18
-                    font_bold    = False
-                    font_color   = ""
-                    try:
-                        tf = ph.text_frame
-                        if tf.paragraphs and tf.paragraphs[0].runs:
-                            run = tf.paragraphs[0].runs[0]
-                            if run.font.size:
-                                font_size_pt = int(run.font.size.pt)
-                            font_bold = bool(run.font.bold)
-                            try:
-                                font_color = f"#{run.font.color.rgb}"
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                    # ── Font từ lstStyle XML ──────────────────────────────────────
+                    fi           = _extract_ph_font_info(ph)
+                    font_size_pt = fi["font_size_pt"]
+                    font_bold    = fi["font_bold"]
+                    font_color   = fi["font_color"]
+                    font_name    = fi["font_name"]
+                    align        = fi["align"]
 
                     ph_data = {
                         "idx":          ph_idx,
@@ -308,13 +452,15 @@ def analyze_master(pptx_bytes: bytes) -> dict:
                         "label":        ph.name or f"ph_{ph_idx}",
                         "left_emu":     left,  "top_emu":    top,
                         "width_emu":    width, "height_emu": height,
-                        "left_px":      _emu_to_px(left,   "x"),
-                        "top_px":       _emu_to_px(top,    "y"),
-                        "width_px":     _emu_to_px(width,  "x"),
-                        "height_px":    _emu_to_px(height, "y"),
+                        "left_px":      _emu_to_px(left,   _scale_x),
+                        "top_px":       _emu_to_px(top,    _scale_y),
+                        "width_px":     _emu_to_px(width,  _scale_x),
+                        "height_px":    _emu_to_px(height, _scale_y),
                         "font_size_pt": font_size_pt,
                         "font_bold":    font_bold,
                         "font_color":   font_color,
+                        "font_name":    font_name,
+                        "align":        align,
                     }
 
                     if ph_type == "body":
@@ -324,6 +470,12 @@ def analyze_master(pptx_bytes: bytes) -> dict:
 
                 except Exception:
                     continue  # bỏ qua placeholder lỗi, tiếp tục
+
+            # ── Content zone (vùng AI tự do design) ─────────────────────────────
+            layout_info["content_zone"] = _calc_content_zone(
+                layout_info["placeholders"], _scale_x, _scale_y,
+                _DEFAULT_TARGET_W_PX, _DEFAULT_TARGET_H_PX
+            )
 
             schema["layouts"].append(layout_info)
 

@@ -27,6 +27,31 @@ FONT_REPLACEMENTS = {
     "Courier New":      "Courier New, Courier, monospace",
     "Courier":          "Courier New, Courier, monospace",
     "Times":            "Times New Roman, serif",
+
+    # Japanese fonts (VTI master ver2)
+    "Yu Gothic Light":  "Yu Gothic Light, Meiryo, Arial, sans-serif",
+    "Yu Gothic":        "Yu Gothic, Meiryo, Arial, sans-serif",
+    "游ゴシック Light":  "Yu Gothic Light, Meiryo, Arial, sans-serif",
+    "游ゴシック":        "Yu Gothic, Meiryo, Arial, sans-serif",
+    "Yu Mincho":        "Yu Mincho, Times New Roman, serif",
+    "游明朝":            "Yu Mincho, Times New Roman, serif",
+    "Meiryo":           "Meiryo, Arial, sans-serif",
+    "メイリオ":          "Meiryo, Arial, sans-serif",
+    "MS PGothic":       "MS PGothic, Arial, sans-serif",
+    "MS Gothic":        "MS Gothic, Arial, sans-serif",
+    "+mj-ea":           "Yu Gothic Light, Meiryo, sans-serif",
+    "+mn-ea":           "Yu Gothic, Meiryo, sans-serif",
+    "+mj-lt":           "Calibri Light, Arial, sans-serif",
+    "+mn-lt":           "Calibri, Arial, sans-serif",
+
+    # Korean
+    "Malgun Gothic":    "Malgun Gothic, Arial, sans-serif",
+
+    # Chinese
+    "Microsoft YaHei":  "Microsoft YaHei, Arial, sans-serif",
+    "微软雅黑":          "Microsoft YaHei, Arial, sans-serif",
+    "SimSun":           "SimSun, Times New Roman, serif",
+    "宋体":              "SimSun, Times New Roman, serif",
 }
 
 

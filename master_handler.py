@@ -15,13 +15,28 @@ import io
 import re
 from lxml import etree
 from pptx import Presentation
-from pptx.util import Pt
+from pptx.util import Pt, Emu
 from pptx.enum.text import PP_ALIGN
 
 
 # ─── Namespace cho DrawingML theme XML ───────────────────────────────────────
 _DML_NS  = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 _SVG_NS  = "http://www.w3.org/2000/svg"
+
+# ─── SVG canvas + content zone (pixel, tương ứng viewBox="0 0 1280 720") ────
+_SVG_W   = 1280   # SVG canvas width  (px)
+_SVG_H   = 720    # SVG canvas height (px)
+_CZ_X    = 88     # content zone left  (px) — bắt đầu từ margin trái
+_CZ_Y    = 131    # content zone top   (px) — kết thúc header zone
+_CZ_W    = 1104   # content zone width (px)
+_CZ_H    = 496    # content zone height(px) — kết thúc trước footer (y=627)
+
+# OPC relationship type cho image embed
+_REL_TYPE_IMAGE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+)
+# URI cho SVG blip extension (PowerPoint 2016+)
+_SVG_EXT_URI = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
 
 # Mapping placeholder type integer → tên đọc được
 _PH_TYPE_MAP = {
@@ -178,15 +193,40 @@ def _extract_default_font(prs: Presentation) -> str:
 # 2. find_best_layout
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Map data-layout → danh sách keyword tìm trong tên layout (ưu tiên từ trái)
-_LAYOUT_KEYWORDS = {
-    "title-slide":    ["title slide", "title, slide", "title only"],
-    "section-header": ["section header", "section", "divider"],
-    "content":        ["title and content", "title, content", "content"],
-    "two-column":     ["two content", "comparison", "two column", "2 content"],
+# Map data-layout value → danh sách tên layout có thể có (English + Japanese + Korean + Chinese)
+# Được dùng bởi find_best_layout() để tìm layout phù hợp theo tên thực tế
+_DATA_LAYOUT_TO_NAMES = {
+    "title-slide":    [
+        "title slide", "title, slide",
+        "タイトル スライド", "제목 슬라이드", "标题幻灯片",
+    ],
+    "section-header": [
+        "section header", "section",
+        "セクション見出し", "단락머리글", "节标题",
+    ],
+    "content":        [
+        "title and content", "title, content", "content",
+        "タイトルとコンテンツ", "标题和内容",
+        "제목 및 내용",
+    ],
+    "two-column":     [
+        "two content", "comparison", "two column", "2 content",
+        "2 つのコンテンツ", "比較", "两栏内容", "두 내용",
+    ],
+    "title-only":     [
+        "title only", "タイトルのみ",
+    ],
+    "content-caption": [
+        "content with caption", "タイトル付きのコンテンツ",
+    ],
+    "picture-caption": [
+        "picture with caption", "タイトル付きの図",
+    ],
     "big-stat":       ["title and content", "content"],
-    "blank":          ["blank"],
+    "blank":          ["blank", "白紙"],
 }
+
+# Fallback index khi không tìm thấy bằng tên (clamp đến max_idx khi dùng)
 _LAYOUT_FALLBACK_INDEX = {
     "title-slide":    0,
     "section-header": 2,
@@ -197,31 +237,42 @@ _LAYOUT_FALLBACK_INDEX = {
 }
 
 
-def find_best_layout(master_info: dict, svg_data_layout: str) -> int:
+def find_best_layout(prs: Presentation, svg_data_layout: str):
     """
-    Map data-layout từ SVG sang layout index trong master PPTX.
+    Map data-layout từ SVG sang layout object phù hợp trong master PPTX.
+
+    Tìm kiếm theo tên (có hỗ trợ tiếng Nhật, Hàn, Trung, Anh).
+    Fallback theo index cố định.
+    Fallback cuối: prs.slide_layouts[0].
 
     Args:
-        master_info:     Kết quả từ parse_master_info().
+        prs:             Presentation object (python-pptx).
         svg_data_layout: Giá trị thuộc tính data-layout trong SVG.
 
     Returns:
-        Index của layout phù hợp nhất (int).
+        SlideLayout object phù hợp nhất.
     """
-    layout_key  = (svg_data_layout or "content").lower().strip()
-    keywords    = _LAYOUT_KEYWORDS.get(layout_key, _LAYOUT_KEYWORDS["content"])
-    fallback_idx = _LAYOUT_FALLBACK_INDEX.get(layout_key, 6)
+    layout_key   = (svg_data_layout or "content").lower().strip()
+    target_names = _DATA_LAYOUT_TO_NAMES.get(layout_key,
+                   _DATA_LAYOUT_TO_NAMES.get("content", []))
+    layouts      = prs.slide_layouts
+    max_idx      = len(layouts) - 1
 
-    layouts = master_info.get("layouts", [])
-    max_idx  = len(layouts) - 1
-
-    for keyword in keywords:
+    # 1. Tìm theo tên layout (có hỗ trợ tất cả ngôn ngữ)
+    for target in target_names:
+        target_low = target.lower()
         for layout in layouts:
-            if keyword in layout["name"].lower():
-                return layout["index"]
+            if target_low in (layout.name or "").lower():
+                return layout
 
-    # Fallback theo index cố định (clamp để tránh vượt giới hạn)
-    return min(fallback_idx, max_idx) if max_idx >= 0 else 0
+    # 2. Fallback theo index cố định
+    fb_idx = _LAYOUT_FALLBACK_INDEX.get(layout_key, 1)
+    fb_idx = min(fb_idx, max_idx) if max_idx >= 0 else 0
+    if 0 <= fb_idx <= max_idx:
+        return layouts[fb_idx]
+
+    # 3. Fallback cuối cùng
+    return layouts[-1] if layouts else layouts[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -258,24 +309,31 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
             return result
 
         def _localname(el) -> str:
-            """Lấy tag name không có namespace prefix."""
+            """
+            Lấy tag name không có namespace prefix.
+            An toàn với XML Comment/PI nodes (lxml biểu diễn bằng callable tag).
+            """
             tag = el.tag
-            return etree.QName(tag).localname if "{" in tag else tag
+            if callable(tag):          # Comment, ProcessingInstruction, v.v.
+                return ""
+            if not isinstance(tag, str):
+                return ""
+            return tag.split("}")[1] if "{" in tag else tag
 
         def _get_full_text(el) -> str:
             """
             Lấy toàn bộ text content của element (kể cả <tspan> lồng nhau).
-            Dùng itertext() nhưng loại bỏ trùng lặp bằng cách chỉ đọc từ
-            leaf text nodes, không đọc text của element cha lại.
+            An toàn với XML Comment nodes (callable tag trong lxml).
             """
             parts = []
             for node in el.iter():
+                # Bỏ qua Comment/PI nodes (callable tag)
+                if callable(node.tag):
+                    continue
                 if node.get("data-role", "") == "decorative":
                     continue
-                # Chỉ lấy text trực tiếp (node.text), không lấy tail của root
                 if node.text and node.text.strip():
                     parts.append(node.text.strip())
-                # tail chỉ lấy cho các node con (không phải root el)
                 if node is not el and node.tail and node.tail.strip():
                     parts.append(node.tail.strip())
             return " ".join(parts)
@@ -289,6 +347,9 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
             items = []
 
             def _process_child(el):
+                # Bỏ qua Comment/PI nodes
+                if callable(el.tag):
+                    return
                 lname = _localname(el)
                 role  = el.get("data-role", "")
 
@@ -345,16 +406,20 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
             return items
 
         # ── Tìm slide root ────────────────────────────────────────────────
-        # Ưu tiên <g id="slide_N"> (được giữ lại từ wrap_group_in_svg cải tiến)
         slide_g = None
         for el in root.iter():
-            el_id = el.get("id", "")
-            if re.match(r"^slide_\d+$", el_id):
+            # Guard: bỏ qua Comment/PI nodes (tag là callable trong lxml)
+            if callable(el.tag):
+                continue
+            el_id = el.get("id") or ""   # dùng "or" thay default="" vì Comment node
+            if el_id and re.match(r"^slide_\d+$", el_id):
                 slide_g = el
                 break
         if slide_g is None:
             # Fallback: dùng <g> đầu tiên con của root (wrapper <g>)
             for el in root:
+                if callable(el.tag):     # bỏ qua Comment nodes
+                    continue
                 if _localname(el) == "g":
                     slide_g = el
                     break
@@ -368,6 +433,8 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
         # Cũng đọc trên root trong trường hợp slide_g = root
         for search_el in [slide_g, root]:
             for child in search_el:
+                if callable(child.tag):    # bỏ qua Comment nodes
+                    continue
                 if _localname(child) == "metadata":
                     for meta_child in child:
                         if _localname(meta_child) == "slide-layout":
@@ -378,6 +445,9 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
 
         # ── Duyệt direct children của slide_g để tìm data-role groups ────
         for el in slide_g:
+            # Bỏ qua Comment/PI nodes (callable tag trong lxml)
+            if callable(el.tag):
+                continue
             lname = _localname(el)
             role  = el.get("data-role", "").lower().strip()
 
@@ -407,53 +477,6 @@ def extract_svg_semantic_content(slide_svg: str) -> dict:
 # 4. build_pptx_with_master
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _set_placeholder_text(ph, content_items: list) -> None:
-    """
-    Điền nội dung từ list content_items vào một placeholder text frame.
-    Không set font.name và màu — kế thừa từ master.
-    """
-    try:
-        tf = ph.text_frame
-        tf.clear()
-        # Xóa hết paragraph cũ
-        for para in tf.paragraphs[1:]:
-            p_el = para._p
-            p_el.getparent().remove(p_el)
-
-        first = True
-        for item in content_items:
-            if first:
-                para = tf.paragraphs[0]
-                first = False
-            else:
-                para = tf.add_paragraph()
-
-            para.level = max(0, (item.get("level", 1) or 1) - 1)  # python-pptx 0-based
-
-            text = item.get("text", "")
-            dtype = item.get("type", "paragraph") or "paragraph"
-
-            # Biến đổi text theo type
-            if dtype == "quote":
-                text = f"\u275d {text} \u275e"
-            # (stat-label, caption, bullet, paragraph giữ nguyên text)
-
-            run = para.add_run()
-            run.text = text
-
-            # Font size theo type — KHÔNG set font.name
-            if dtype == "stat-number":
-                run.font.size = Pt(48)
-                run.font.bold = True
-            elif dtype == "caption":
-                run.font.size = Pt(10)
-            elif dtype == "quote":
-                run.font.italic = True
-
-    except Exception:
-        pass  # Bỏ qua silently nếu placeholder không hỗ trợ
-
-
 def _find_placeholder(slide, idx: int):
     """Tìm placeholder theo idx. Trả về None nếu không tồn tại."""
     for ph in slide.placeholders:
@@ -465,20 +488,197 @@ def _find_placeholder(slide, idx: int):
     return None
 
 
-def _find_placeholder_by_type(slide, type_str: str):
-    """Tìm placeholder theo type string. Trả về None nếu không có."""
-    type_map = {
-        "title":    [0, 13],
-        "body":     [1, 2],
-        "footer":   [10, 11, 12],
-        "subtitle": [1],
-    }
-    indices = type_map.get(type_str, [])
-    for idx in indices:
-        ph = _find_placeholder(slide, idx)
-        if ph is not None:
-            return ph
-    return None
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. SVG crop & embed helpers (cho hybrid master mode)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _crop_svg_to_content_zone(full_slide_svg: str) -> str:
+    """
+    Tạo SVG chỉ chứa content zone bằng cách đổi viewBox.
+
+    Quy trình:
+      1. Parse SVG bằng BeautifulSoup lxml-xml
+      2. Xóa <g data-role="title"> (đã được set qua ph[0] placeholder)
+      3. Đổi viewBox = "88 131 1104 496" → crop đúng vào content zone
+      4. Đổi width/height = 1104/496
+
+    Returns:
+        SVG string đã crop. Trả về full_slide_svg nếu lỗi (không crash).
+    """
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(full_slide_svg, "lxml-xml")
+        svg_tag = soup.find("svg")
+        if svg_tag is None:
+            return full_slide_svg
+        # Xóa title group — sẽ hiển thị qua ph[0] placeholder của master
+        for g in svg_tag.find_all("g", attrs={"data-role": "title"}):
+            g.decompose()
+        # Crop viewBox vào content zone
+        svg_tag["viewBox"] = f"{_CZ_X} {_CZ_Y} {_CZ_W} {_CZ_H}"
+        svg_tag["width"]   = str(_CZ_W)
+        svg_tag["height"]  = str(_CZ_H)
+        return str(soup)
+    except Exception:
+        return full_slide_svg
+
+
+def _strip_text_roles_from_svg(full_slide_svg: str) -> str:
+    """
+    Tạo SVG background-only cho title slide.
+
+    Xóa data-role="title" và data-role="subtitle" — các text này
+    sẽ hiển thị qua ph[0] và ph[1] placeholder của master.
+    Giữ nguyên viewBox full slide (0 0 1280 720) để cover toàn bộ nền.
+
+    Returns:
+        SVG string chỉ còn background/decorative.
+        Trả về full_slide_svg nếu lỗi (không crash).
+    """
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(full_slide_svg, "lxml-xml")
+        svg_tag = soup.find("svg")
+        if svg_tag is None:
+            return full_slide_svg
+        for role in ("title", "subtitle"):
+            for g in svg_tag.find_all("g", attrs={"data-role": role}):
+                g.decompose()
+        # Giữ nguyên viewBox full slide
+        svg_tag["viewBox"] = f"0 0 {_SVG_W} {_SVG_H}"
+        svg_tag["width"]   = str(_SVG_W)
+        svg_tag["height"]  = str(_SVG_H)
+        return str(soup)
+    except Exception:
+        return full_slide_svg
+
+
+def _embed_svg_at(
+    slide,
+    svg_content: str,
+    left_emu: int,
+    top_emu: int,
+    width_emu: int,
+    height_emu: int,
+    shape_name: str,
+    insert_front: bool = False,
+) -> None:
+    """
+    Embed SVG vào slide tại vị trí và kích thước chỉ định (EMU).
+
+    Args:
+        slide:        python-pptx Slide object.
+        svg_content:  Chuỗi SVG đã xử lý.
+        left_emu:     Tọa độ X từ cạnh trái slide (EMU).
+        top_emu:      Tọa độ Y từ cạnh trên slide (EMU).
+        width_emu:    Chiều rộng vùng hiển thị (EMU).
+        height_emu:   Chiều cao vùng hiển thị (EMU).
+        shape_name:   Tên shape trong PPTX (để debug).
+        insert_front: True → insert vào đầu spTree (SVG ở layer dưới placeholder).
+                      False → append vào cuối (SVG ở layer trên).
+    """
+    try:
+        # ── Correct OPC import paths ─────────────────────────────────────────
+        from pptx.opc.package import Part as _OpcPart, PackURI as _PackURI
+        from lxml import etree as _etree
+        import hashlib, time as _time
+
+        svg_bytes  = svg_content.encode("utf-8")
+        slide_part = slide.part
+
+        # Tên part duy nhất để tránh conflict trong OPC package
+        uid_str  = f"{shape_name}_{_time.monotonic()}"
+        uid_hex  = hashlib.md5(uid_str.encode()).hexdigest()        # 32 hex chars
+        # shape id phải là số nguyên dương (OOXML spec)
+        shape_id = abs(int(uid_hex[:8], 16)) % 32766 + 2           # 2..32767
+
+        partname = _PackURI(f"/ppt/media/svg_{uid_hex[:12]}.svg")
+
+        # ── Minimal 1×1 white PNG fallback (required by PowerPoint viewers) ──
+        # PowerPoint cần blip fallback PNG; nếu không có → hiện tam giác lỗi
+        _PNG_1X1 = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00"
+            b"\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx"
+            b"\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xdc\xccY\xe7\x00\x00"
+            b"\x00\x00IEND\xaeB`\x82"
+        )
+        png_partname = _PackURI(f"/ppt/media/png_{uid_hex[:12]}.png")
+        png_part = _OpcPart(
+            partname     = png_partname,
+            content_type = "image/png",
+            blob         = _PNG_1X1,
+            package      = slide_part.package,
+        )
+        svg_part = _OpcPart(
+            partname     = partname,
+            content_type = "image/svg+xml",
+            blob         = svg_bytes,
+            package      = slide_part.package,
+        )
+        rId_png = slide_part.relate_to(png_part, _REL_TYPE_IMAGE)
+        rId_svg = slide_part.relate_to(svg_part, _REL_TYPE_IMAGE)
+
+        # Namespace shortcuts
+        PPTX_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+        DML_NS  = "http://schemas.openxmlformats.org/drawingml/2006/main"
+        REL_NS  = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        SVG_NS  = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+
+        _p  = lambda t: f"{{{PPTX_NS}}}{t}"
+        _a  = lambda t: f"{{{DML_NS}}}{t}"
+        _r  = lambda t: f"{{{REL_NS}}}{t}"
+        _sv = lambda t: f"{{{SVG_NS}}}{t}"
+
+        pic = _etree.Element(_p("pic"),
+                             nsmap={"p": PPTX_NS, "a": DML_NS,
+                                    "r": REL_NS, "asvg": SVG_NS})
+
+        # nvPicPr — id phải là số nguyên hợp lệ
+        nvPicPr  = _etree.SubElement(pic, _p("nvPicPr"))
+        cNvPr    = _etree.SubElement(nvPicPr, _p("cNvPr"))
+        cNvPr.set("id", str(shape_id))
+        cNvPr.set("name", shape_name)
+        cNvPicPr = _etree.SubElement(nvPicPr, _p("cNvPicPr"))
+        cNvPicPr.set("preferRelativeResize", "0")
+        picLocks = _etree.SubElement(cNvPicPr, _a("picLocks"))
+        picLocks.set("noChangeAspect", "1")
+        _etree.SubElement(nvPicPr, _p("nvPr"))
+
+        # blipFill: PNG fallback + SVG extension
+        blipFill = _etree.SubElement(pic, _p("blipFill"))
+        blip     = _etree.SubElement(blipFill, _a("blip"))
+        blip.set(_r("embed"), rId_png)          # fallback PNG
+        extLst   = _etree.SubElement(blip, _a("extLst"))
+        ext      = _etree.SubElement(extLst, _a("ext"))
+        ext.set("uri", _SVG_EXT_URI)
+        svgBlip  = _etree.SubElement(ext, _sv("svgBlip"))
+        svgBlip.set(_r("embed"), rId_svg)       # SVG vector
+        stretch  = _etree.SubElement(blipFill, _a("stretch"))
+        _etree.SubElement(stretch, _a("fillRect"))
+
+        # spPr — vị trí và kích thước
+        spPr     = _etree.SubElement(pic, _p("spPr"))
+        xfrm     = _etree.SubElement(spPr, _a("xfrm"))
+        off      = _etree.SubElement(xfrm, _a("off"))
+        off.set("x", str(int(left_emu)))
+        off.set("y", str(int(top_emu)))
+        ext_sz   = _etree.SubElement(xfrm, _a("ext"))
+        ext_sz.set("cx", str(int(width_emu)))
+        ext_sz.set("cy", str(int(height_emu)))
+        prstGeom = _etree.SubElement(spPr, _a("prstGeom"))
+        prstGeom.set("prst", "rect")
+        _etree.SubElement(prstGeom, _a("avLst"))
+
+        # Thêm vào spTree
+        sp_tree = slide.shapes._spTree
+        if insert_front:
+            sp_tree.insert(2, pic)   # index 2: sau nvGrpSpPr và grpSpPr
+        else:
+            sp_tree.append(pic)
+
+    except Exception as _e:
+        import sys
+        print(f"[_embed_svg_at] ERROR {shape_name}: {_e}", file=sys.stderr)
 
 
 def build_pptx_with_master(
@@ -506,98 +706,108 @@ def build_pptx_with_master(
     prs = Presentation(io.BytesIO(pptx_bytes))
     # KHÔNG thay đổi slide_width/slide_height — kế thừa từ master
 
-    # ── Xóa toàn bộ slide hiện có ───────────────────────────────────────────
-    try:
-        xml_slides = prs.slides._sldIdLst
-        for slide_id in list(xml_slides):
-            xml_slides.remove(slide_id)
-    except Exception:
-        pass
+    # ── Xóa toàn bộ slide hiện có (proper cleanup) ──────────────────────────
+    # Phải xóa cả OPC relationship lẫn sldId element, nếu không PPTX bị corrupt
+    # vì còn dangling rel trỏ tới slide part đã bị orphan.
+    _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    sldIdLst = prs.slides._sldIdLst
+    for sldId_el in list(sldIdLst):
+        rId = sldId_el.get(f"{{{_REL_NS}}}id")
+        if rId:
+            try:
+                prs.part.drop_rel(rId)
+            except Exception:
+                pass
+        try:
+            sldIdLst.remove(sldId_el)
+        except Exception:
+            pass
 
-    max_layout_idx = len(prs.slide_layouts) - 1
+    # ── Tính scale EMU/px từ master thực tế (không hardcode) ─────────────────
+    _w_emu = int(prs.slide_width)
+    _h_emu = int(prs.slide_height)
+    _scale = _w_emu / _SVG_W   # EMU per SVG pixel, uniform cả 2 chiều
 
-    # ── Thêm slide mới theo nội dung SVG ────────────────────────────────────
-    for slide_data in slides:
-        svg_text = slide_data.get("svg", "")
+    # Content zone trong EMU (tính động từ scale)
+    _cz_left   = round(_CZ_X * _scale)
+    _cz_top    = round(_CZ_Y * _scale)
+    _cz_width  = round(_CZ_W * _scale)
+    _cz_height = round(_CZ_H * _scale)
 
-        # 1. Lấy nội dung semantic từ SVG
-        semantic = extract_svg_semantic_content(svg_text)
+    # ── Thêm slide mới theo nội dung SVG ─────────────────────────────────────
+    for slide_idx, slide_data in enumerate(slides):
+        svg_text   = slide_data.get("svg", "")
 
-        # 2. Xác định layout: ưu tiên data_layout đã cache khi extract,
-        #    fallback semantic parse, fallback "content"
+        # 1. Parse semantic để lấy title, subtitle, layout
+        semantic   = extract_svg_semantic_content(svg_text)
         raw_layout = (
             slide_data.get("data_layout", "")
             or semantic.get("layout", "")
             or "content"
         )
+        is_title_slide = raw_layout in ("title-slide", "title slide")
 
-        # 3. Tìm layout index phù hợp trong master
-        layout_idx = find_best_layout(master_info, raw_layout)
-        layout_idx = min(layout_idx, max_layout_idx)
-        layout     = prs.slide_layouts[layout_idx]
+        # 2. Tìm layout phù hợp trong master
+        layout = find_best_layout(prs, raw_layout)
 
-        # 4. Thêm slide mới
+        # 3. Thêm slide mới
         slide = prs.slides.add_slide(layout)
 
-        # 5. Map title (placeholder idx=0)
-        title_ph = _find_placeholder(slide, 0)
-        if title_ph is not None:
+        # 4. Set title qua ph[0] placeholder → dùng font/style của master
+        title_text = semantic.get("title", "")
+        _ph0 = _find_placeholder(slide, 0)
+        if _ph0 is not None:
             try:
-                title_ph.text = semantic.get("title", "")
+                _ph0.text = title_text
             except Exception:
                 pass
 
-        # 6. Map subtitle (idx=1 trên title-slide / section-header)
-        subtitle_text = semantic.get("subtitle", "")
-        layout_name_lower = layout.name.lower()
-        is_title_layout = any(k in layout_name_lower for k in [
-            "title slide", "title, slide", "section header", "section"
-        ])
-
-        if subtitle_text and is_title_layout:
-            sub_ph = _find_placeholder(slide, 1)
-            if sub_ph is not None:
+        # 5. Xử lý body theo loại layout ──────────────────────────────────────
+        if is_title_slide:
+            # TITLE SLIDE:
+            #   ph[0] đã có title (bước 4)
+            #   ph[1] subtitle → set text qua placeholder (master font/style)
+            #   Background → embed full SVG đã xóa title/subtitle text
+            subtitle_text = semantic.get("subtitle", "")
+            _ph1 = _find_placeholder(slide, 1)
+            if _ph1 is not None:
                 try:
-                    sub_ph.text = subtitle_text
+                    _ph1.text = subtitle_text
                 except Exception:
                     pass
 
-        # 7. Map content theo loại layout
-        is_two_column = any(k in layout_name_lower for k in [
-            "two content", "comparison", "two column", "2 content"
-        ])
+            # Embed SVG background: full slide, chỉ giữ decorative shapes
+            bg_svg = _strip_text_roles_from_svg(svg_text)
+            if bg_svg.strip():
+                _embed_svg_at(
+                    slide        = slide,
+                    svg_content  = bg_svg,
+                    left_emu     = 0,
+                    top_emu      = 0,
+                    width_emu    = _w_emu,
+                    height_emu   = _h_emu,
+                    shape_name   = f"SVGBg_{slide_idx + 1}",
+                    insert_front = True,   # dưới placeholder để chữ hiện lên trên
+                )
 
-        if is_two_column:
-            # two-column: content_left → idx=1, content_right → idx=2
-            left_items  = semantic.get("content_left", []) or semantic.get("content", [])
-            right_items = semantic.get("content_right", [])
-            ph_left  = _find_placeholder(slide, 1)
-            ph_right = _find_placeholder(slide, 2)
-            if ph_left  is not None and left_items:
-                _set_placeholder_text(ph_left, left_items)
-            if ph_right is not None and right_items:
-                _set_placeholder_text(ph_right, right_items)
         else:
-            content_items = semantic.get("content", [])
-            if content_items:
-                # Trên title-slide layout, body (idx=1) thường là subtitle →
-                # chỉ map content nếu không phải title layout hoặc không có subtitle
-                if not (is_title_layout and subtitle_text):
-                    body_ph = _find_placeholder(slide, 1)
-                    if body_ph is not None:
-                        _set_placeholder_text(body_ph, content_items)
-
-        # 8. Map footer (thử idx 10, 11, 12)
-        footer_text = semantic.get("footer", "")
-        if footer_text:
-            for footer_idx in [10, 11, 12]:
-                footer_ph = _find_placeholder(slide, footer_idx)
-                if footer_ph is not None:
-                    try:
-                        footer_ph.text = footer_text
-                        break
-                    except Exception:
-                        continue
+            # CONTENT SLIDE:
+            #   ph[0] đã có title (bước 4)
+            #   Body → embed SVG crop vào content zone (giữ NGUYÊN visual design)
+            #   KHÔNG tạo textbox, KHÔNG phân rã text
+            content_svg = _crop_svg_to_content_zone(svg_text)
+            if content_svg.strip():
+                _embed_svg_at(
+                    slide        = slide,
+                    svg_content  = content_svg,
+                    left_emu     = _cz_left,
+                    top_emu      = _cz_top,
+                    width_emu    = _cz_width,
+                    height_emu   = _cz_height,
+                    shape_name   = f"SVGContent_{slide_idx + 1}",
+                    insert_front = False,  # sau placeholder, hiển thị trên cùng
+                )
+        # ph[12] slide number: PowerPoint tự điền — không cần xử lý
 
     # ── Lưu ra BytesIO ──────────────────────────────────────────────────────
     output = io.BytesIO()
