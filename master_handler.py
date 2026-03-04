@@ -488,6 +488,51 @@ def _find_placeholder(slide, idx: int):
     return None
 
 
+def _copy_sldnum_placeholder(slide, layout, slide_number: int) -> None:
+    """
+    Copy thủ công placeholder số trang từ layout vào slide XML.
+
+    python-pptx KHÔNG tự động copy các footer/date/sldNum placeholder
+    từ layout sang slide khi gọi add_slide(). Nếu không có element này
+    trực tiếp trong slide XML, PowerPoint hiển thị ô số trang trống.
+
+    Args:
+        slide:        Slide object mới tạo.
+        layout:       Layout đã dùng cho slide.
+        slide_number: Chỉ số 1-based để tạo cNvPr id duy nhất.
+    """
+    try:
+        import copy as _copy
+        from lxml import etree as _etree
+
+        P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+
+        # Tìm <p:sp> có <p:ph type="sldNum"/> trong layout
+        sldnum_sp = None
+        for sp_ph in layout.placeholders:
+            try:
+                if sp_ph.placeholder_format.type.name == "SLIDE_NUMBER":
+                    sldnum_sp = sp_ph._element
+                    break
+            except Exception:
+                continue
+
+        if sldnum_sp is None:
+            return  # Layout không có sldNum placeholder
+
+        # Deep copy — không sửa layout gốc
+        sp_copy = _copy.deepcopy(sldnum_sp)
+
+        # Cập nhật cNvPr id → phải là số nguyên duy nhất trong slide
+        cNvPr = sp_copy.find(f"{{{P_NS}}}nvSpPr/{{{P_NS}}}cNvPr")
+        if cNvPr is not None:
+            cNvPr.set("id", str(2000 + slide_number))
+
+        slide.shapes._spTree.append(sp_copy)
+    except Exception:
+        pass  # Không crash build
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. SVG crop & embed helpers (cho hybrid master mode)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -752,6 +797,9 @@ def build_pptx_with_master(
 
         # 3. Thêm slide mới
         slide = prs.slides.add_slide(layout)
+
+        # Copy sldNum placeholder từ layout vào slide → số trang hiển thị đúng
+        _copy_sldnum_placeholder(slide, layout, slide_idx + 1)
 
         # 4. Set title qua ph[0] placeholder → dùng font/style của master
         title_text = semantic.get("title", "")
